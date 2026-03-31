@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentSession } from "@/lib/session";
 import {
+  cancelSycamoreSyncBatch,
   enqueueSycamoreSyncBatch,
   getActiveSycamoreSyncBatchSummary,
   getSycamoreSyncBatchSummary,
@@ -66,6 +67,42 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not queue the Sycamore sync.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const session = getCurrentSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (session.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const batchId = typeof body?.batchId === "string" ? body.batchId.trim() : "";
+  if (!batchId) {
+    return NextResponse.json({ error: "Missing Sycamore sync batch id." }, { status: 400 });
+  }
+
+  try {
+    const result = await cancelSycamoreSyncBatch({
+      batchId,
+      actorEmail: session.email
+    });
+    if (!result.batch) {
+      return NextResponse.json({ error: "Sycamore sync batch not found." }, { status: 404 });
+    }
+    return NextResponse.json(
+      {
+        sycamoreSync: result.batch,
+        alreadyTerminal: result.alreadyTerminal
+      },
+      { status: 200 }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not cancel the Sycamore sync batch.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

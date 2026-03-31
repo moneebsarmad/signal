@@ -19,8 +19,14 @@ import {
   type SycamoreSyncProgressSnapshot
 } from "@/lib/sycamore-direct-sync";
 
-export type SycamoreAsyncJobStatus = "queued" | "running" | "succeeded" | "failed";
-export type SycamoreSyncBatchStatus = "queued" | "running" | "success" | "partial" | "failed";
+export type SycamoreAsyncJobStatus =
+  | "queued"
+  | "running"
+  | "cancel_requested"
+  | "canceled"
+  | "succeeded"
+  | "failed";
+export type SycamoreSyncBatchStatus = "queued" | "running" | "canceling" | "canceled" | "success" | "partial" | "failed";
 
 export interface SycamoreSyncJobRecord {
   id: string;
@@ -66,6 +72,7 @@ export interface SycamoreSyncBatchSummary {
   totalChunks: number;
   completedChunks: number;
   failedChunks: number;
+  canceledChunks: number;
   activeChunkIndex: number;
   currentWindow: {
     startDate: string;
@@ -147,7 +154,9 @@ interface SycamoreSyncJobStore {
   listSyncJobs(limit: number): Promise<SycamoreSyncJobRecord[]>;
   listSyncJobsByBatch(batchId: string): Promise<SycamoreSyncJobRecord[]>;
   listActiveSyncJobs(): Promise<SycamoreSyncJobRecord[]>;
+  getSyncJobById(id: string): Promise<SycamoreSyncJobRecord | null>;
   claimNextSyncJob(staleBeforeIso: string): Promise<SycamoreSyncJobRecord | null>;
+  cancelSyncBatch(batchId: string, options: { actor: string }): Promise<SycamoreSyncJobRecord[]>;
   updateRunningSyncJob(id: string, patch: UpdateRunningSyncJobInput): Promise<void>;
   completeSyncJob(id: string, patch: CompleteSyncJobInput): Promise<void>;
   failSyncJob(id: string, patch: { errorMessage: string; warnings?: string[] }): Promise<void>;
@@ -314,6 +323,10 @@ function chunkSizeDays(jobs: SycamoreSyncJobRecord[]): number {
   return Math.max(...jobs.map((job) => inclusiveDaySpan(job.window.startDate, job.window.endDate)), 1);
 }
 
+function isTerminalJobStatus(status: SycamoreAsyncJobStatus): boolean {
+  return status === "succeeded" || status === "failed" || status === "canceled";
+}
+
 export function summarizeSycamoreSyncBatch(
   jobs: SycamoreSyncJobRecord[],
   options?: {
@@ -328,11 +341,13 @@ export function summarizeSycamoreSyncBatch(
   const staleMinutes = staleAfterMinutes();
   const sorted = [...jobs].sort((left, right) => left.sequenceIndex - right.sequenceIndex || left.createdAt.localeCompare(right.createdAt));
   const totalChunks = sorted.length;
-  const completedChunks = sorted.filter((job) => job.status === "succeeded" || job.status === "failed").length;
+  const completedChunks = sorted.filter((job) => isTerminalJobStatus(job.status)).length;
   const failedChunks = sorted.filter((job) => job.status === "failed").length;
+  const canceledChunks = sorted.filter((job) => job.status === "canceled").length;
   const runningJob = sorted.find((job) => job.status === "running") ?? null;
+  const cancelingJob = sorted.find((job) => job.status === "cancel_requested") ?? null;
   const queuedJob = sorted.find((job) => job.status === "queued") ?? null;
-  const activeJob = runningJob ?? queuedJob ?? sorted.at(-1) ?? sorted[0] ?? null;
+  const activeJob = cancelingJob ?? runningJob ?? queuedJob ?? sorted.at(-1) ?? sorted[0] ?? null;
   const failedJobs = sorted
     .filter((job) => job.status === "failed")
     .map((job) => ({
@@ -346,12 +361,16 @@ export function summarizeSycamoreSyncBatch(
       completedAt: job.completedAt
     }));
   const resultStatuses = sorted.map((job) => job.resultStatus).filter((value): value is SycamoreSyncStatus => Boolean(value));
-  const status: SycamoreSyncBatchStatus = runningJob
+  const status: SycamoreSyncBatchStatus = cancelingJob
+    ? "canceling"
+    : runningJob
     ? "running"
     : queuedJob
       ? "queued"
       : failedChunks > 0
         ? "failed"
+        : canceledChunks > 0
+          ? "canceled"
         : resultStatuses.includes("partial")
           ? "partial"
           : "success";
@@ -370,7 +389,7 @@ export function summarizeSycamoreSyncBatch(
       : null;
   const activeJobStartedAt = activeJob?.startedAt ?? null;
   const lastHeartbeatAt = activeJob?.lastHeartbeatAt ?? activeJob?.startedAt ?? null;
-  const isStalled = Boolean(runningJob && lastHeartbeatAt && lastHeartbeatAt < staleBeforeIso(nowIso, staleMinutes));
+  const isStalled = Boolean((runningJob || cancelingJob) && lastHeartbeatAt && lastHeartbeatAt < staleBeforeIso(nowIso, staleMinutes));
 
   return {
     batchId: sorted[0]!.batchId,
@@ -388,6 +407,7 @@ export function summarizeSycamoreSyncBatch(
     totalChunks,
     completedChunks,
     failedChunks,
+    canceledChunks,
     activeChunkIndex: activeJob?.sequenceIndex ?? Math.max(0, completedChunks - 1),
     currentWindow: activeJob?.window ?? sorted[0]!.window,
     chunkSizeDays: chunkSizeDays(sorted),
@@ -404,7 +424,7 @@ export function summarizeSycamoreSyncBatch(
     staleAfterMinutes: staleMinutes,
     isStalled,
     triggeredBy: sorted[0]!.triggeredBy,
-    progress: runningJob?.progress ?? null
+    progress: cancelingJob?.progress ?? runningJob?.progress ?? null
   };
 }
 
@@ -478,6 +498,9 @@ function batchTerminalEventType(summary: SycamoreSyncBatchSummary): string | nul
   if (summary.status === "failed") {
     return "sycamore_sync_batch_failed";
   }
+  if (summary.status === "canceled") {
+    return "sycamore_sync_batch_canceled";
+  }
   return null;
 }
 
@@ -537,7 +560,12 @@ function createJobFinishedAuditEvent(input: {
   actor: string;
 }): AuditEvent {
   return createAuditEvent({
-    eventType: input.job.resultStatus === "failed" ? "sycamore_sync_job_failed" : "sycamore_sync_job_completed",
+    eventType:
+      input.job.resultStatus === "failed"
+        ? "sycamore_sync_job_failed"
+        : input.job.resultStatus === "canceled"
+          ? "sycamore_sync_job_canceled"
+          : "sycamore_sync_job_completed",
     entityType: "sycamore_sync_job",
     entityId: input.job.id,
     actor: input.actor,
@@ -556,6 +584,31 @@ function createJobFinishedAuditEvent(input: {
       errorMessage: input.job.errorMessage,
       startedAt: input.job.startedAt,
       completedAt: input.job.completedAt
+    }
+  });
+}
+
+function createBatchCancelRequestedAuditEvent(input: {
+  batch: SycamoreSyncBatchSummary;
+  actor: string;
+}): AuditEvent {
+  return createAuditEvent({
+    eventType: "sycamore_sync_batch_cancel_requested",
+    entityType: "sycamore_sync_batch",
+    entityId: input.batch.batchId,
+    actor: input.actor,
+    payload: {
+      triggeredBy: input.batch.triggeredBy,
+      syncMode: input.batch.syncMode,
+      status: input.batch.status,
+      overallWindow: input.batch.overallWindow,
+      totalChunks: input.batch.totalChunks,
+      completedChunks: input.batch.completedChunks,
+      failedChunks: input.batch.failedChunks,
+      canceledChunks: input.batch.canceledChunks,
+      recordsDiscovered: input.batch.recordsDiscovered,
+      recordsUpserted: input.batch.recordsUpserted,
+      requestedAt: new Date().toISOString()
     }
   });
 }
@@ -645,7 +698,7 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
       const { data, error } = await client
         .from("sycamore_sync_jobs")
         .select("*")
-        .in("status", ["queued", "running"])
+        .in("status", ["queued", "running", "cancel_requested"])
         .order("created_at", { ascending: true })
         .order("sequence_index", { ascending: true });
       if (error) {
@@ -654,11 +707,19 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
       return ((data as RowRecord[] | null) ?? []).map(parseSyncJob);
     },
 
+    async getSyncJobById(id) {
+      const { data, error } = await client.from("sycamore_sync_jobs").select("*").eq("id", id).maybeSingle();
+      if (error) {
+        throw new Error(toSupabaseErrorMessage("sycamore_sync_jobs", "select by id", error));
+      }
+      return data ? parseSyncJob(data as RowRecord) : null;
+    },
+
     async claimNextSyncJob(staleBefore) {
       const { data: activeRows, error: activeError } = await client
         .from("sycamore_sync_jobs")
         .select("*")
-        .eq("status", "running")
+        .in("status", ["running", "cancel_requested"])
         .gte("last_heartbeat_at", staleBefore)
         .order("started_at", { ascending: true })
         .limit(1);
@@ -672,7 +733,9 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
       const { data, error } = await client
         .from("sycamore_sync_jobs")
         .select("*")
-        .or(`status.eq.queued,and(status.eq.running,last_heartbeat_at.lt.${staleBefore})`)
+        .or(
+          `status.eq.queued,and(status.eq.running,last_heartbeat_at.lt.${staleBefore}),and(status.eq.cancel_requested,last_heartbeat_at.lt.${staleBefore})`
+        )
         .order("created_at", { ascending: true })
         .order("sequence_index", { ascending: true })
         .limit(1)
@@ -686,15 +749,16 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
 
       const candidate = parseSyncJob(data as RowRecord);
       const nowIso = new Date().toISOString();
+      const nextStatus = candidate.status === "cancel_requested" ? "cancel_requested" : "running";
       const { data: updated, error: updateError } = await client
         .from("sycamore_sync_jobs")
         .update({
-          status: "running",
+          status: nextStatus,
           started_at: candidate.startedAt ?? nowIso,
           completed_at: null,
           last_heartbeat_at: nowIso,
           attempt_count: candidate.attemptCount + 1,
-          error_message: null
+          error_message: nextStatus === "running" ? null : candidate.errorMessage
         })
         .eq("id", candidate.id)
         .eq("status", candidate.status)
@@ -706,12 +770,46 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
       return updated ? parseSyncJob(updated as RowRecord) : null;
     },
 
+    async cancelSyncBatch(batchId, options) {
+      const nowIso = new Date().toISOString();
+      const cancelMessage = `Canceled by ${options.actor}.`;
+
+      const { error: queuedError } = await client
+        .from("sycamore_sync_jobs")
+        .update({
+          status: "canceled",
+          result_status: "canceled",
+          completed_at: nowIso,
+          last_heartbeat_at: nowIso,
+          error_message: cancelMessage
+        })
+        .eq("batch_id", batchId)
+        .eq("status", "queued");
+      if (queuedError) {
+        throw new Error(toSupabaseErrorMessage("sycamore_sync_jobs", "cancel queued batch jobs", queuedError));
+      }
+
+      const { error: runningError } = await client
+        .from("sycamore_sync_jobs")
+        .update({
+          status: "cancel_requested",
+          error_message: cancelMessage,
+          last_heartbeat_at: nowIso
+        })
+        .eq("batch_id", batchId)
+        .in("status", ["running", "cancel_requested"]);
+      if (runningError) {
+        throw new Error(toSupabaseErrorMessage("sycamore_sync_jobs", "request cancel for running batch jobs", runningError));
+      }
+
+      return this.listSyncJobsByBatch(batchId);
+    },
+
     async updateRunningSyncJob(id, patch) {
       const nowIso = new Date().toISOString();
       const { error } = await client
         .from("sycamore_sync_jobs")
         .update({
-          status: "running",
           sync_log_id: patch.syncLogId ?? undefined,
           progress_payload: patch.progress ?? undefined,
           records_discovered: patch.recordsDiscovered ?? undefined,
@@ -730,7 +828,8 @@ export function createSupabaseSycamoreSyncJobStore(client: SupabaseClient): Syca
       const { error } = await client
         .from("sycamore_sync_jobs")
         .update({
-          status: patch.resultStatus === "failed" ? "failed" : "succeeded",
+          status:
+            patch.resultStatus === "failed" ? "failed" : patch.resultStatus === "canceled" ? "canceled" : "succeeded",
           result_status: patch.resultStatus,
           sync_log_id: patch.syncLogId ?? null,
           records_discovered: patch.recordsDiscovered,
@@ -811,6 +910,68 @@ export async function listRecentSycamoreSyncBatches(input?: {
     .filter((value): value is SycamoreSyncBatchSummary => Boolean(value))
     .sort((left, right) => (right.startedAt ?? right.createdAt).localeCompare(left.startedAt ?? left.createdAt))
     .slice(0, limit);
+}
+
+export async function cancelSycamoreSyncBatch(input: {
+  batchId: string;
+  actorEmail?: string;
+  jobStore?: SycamoreSyncJobStore;
+  auditSink?: SycamoreAuditSink;
+}): Promise<{
+  batch: SycamoreSyncBatchSummary | null;
+  jobs: SycamoreSyncJobRecord[];
+  alreadyTerminal: boolean;
+}> {
+  const jobStore = input.jobStore ?? createDefaultJobStore();
+  const auditSink = input.auditSink ?? createDefaultAuditSink();
+  await jobStore.ensureSchema();
+
+  const currentJobs = await jobStore.listSyncJobsByBatch(input.batchId);
+  if (currentJobs.length === 0) {
+    return {
+      batch: null,
+      jobs: [],
+      alreadyTerminal: false
+    };
+  }
+
+  const alreadyTerminal = currentJobs.every((job) => isTerminalJobStatus(job.status));
+  if (alreadyTerminal) {
+    return {
+      batch: summarizeSycamoreSyncBatch(currentJobs),
+      jobs: currentJobs,
+      alreadyTerminal: true
+    };
+  }
+
+  const updatedJobs = await jobStore.cancelSyncBatch(input.batchId, {
+    actor: defaultAuditActor("manual", input.actorEmail)
+  });
+  const batch = summarizeSycamoreSyncBatch(updatedJobs);
+  if (batch) {
+    await appendAuditEventSafe(
+      auditSink,
+      createBatchCancelRequestedAuditEvent({
+        batch,
+        actor: defaultAuditActor("manual", input.actorEmail)
+      })
+    );
+    if (batch.status === "canceled") {
+      const batchFinishedEvent = createBatchFinishedAuditEvent({
+        batch,
+        actor: defaultAuditActor("manual", input.actorEmail)
+      });
+      if (batchFinishedEvent) {
+        await appendAuditEventSafe(auditSink, batchFinishedEvent);
+      }
+    }
+  }
+
+  return {
+    batch,
+    jobs: updatedJobs,
+    alreadyTerminal: false
+  };
 }
 
 export async function enqueueSycamoreSyncBatch(input: {
@@ -903,6 +1064,56 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
   }
 
   const auditActor = defaultAuditActor(job.triggeredBy, input?.actorEmail);
+  if (job.status === "cancel_requested") {
+    const completedAt = new Date().toISOString();
+    const cancelMessage = job.errorMessage ?? "Sycamore sync canceled by admin request.";
+    if (job.syncLogId) {
+      await syncStore.updateSyncLog(job.syncLogId, {
+        completedAt,
+        status: "canceled",
+        recordsDiscovered: job.recordsDiscovered,
+        recordsSynced: job.recordsUpserted,
+        recordsUpserted: job.recordsUpserted,
+        errorMessage: cancelMessage
+      });
+    }
+    await jobStore.completeSyncJob(job.id, {
+      syncLogId: job.syncLogId,
+      resultStatus: "canceled",
+      recordsDiscovered: job.recordsDiscovered,
+      recordsUpserted: job.recordsUpserted,
+      warnings: job.warnings,
+      completedAt,
+      errorMessage: cancelMessage
+    });
+
+    const canceledJob: SycamoreSyncJobRecord = {
+      ...job,
+      status: "canceled",
+      resultStatus: "canceled",
+      completedAt,
+      lastHeartbeatAt: completedAt,
+      errorMessage: cancelMessage
+    };
+    await appendAuditEventSafe(
+      auditSink,
+      createJobFinishedAuditEvent({
+        job: canceledJob,
+        actor: auditActor
+      })
+    );
+    const batch = await getSycamoreSyncBatchSummary({ batchId: job.batchId, jobStore });
+    const batchFinishedEvent = batch ? createBatchFinishedAuditEvent({ batch, actor: auditActor }) : null;
+    if (batchFinishedEvent) {
+      await appendAuditEventSafe(auditSink, batchFinishedEvent);
+    }
+    return {
+      job: canceledJob,
+      batch,
+      executed: true
+    };
+  }
+
   await appendAuditEventSafe(
     auditSink,
     createJobStartedAuditEvent({
@@ -919,6 +1130,12 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
       resolvedPlan: {
         syncMode: job.syncMode,
         window: job.window
+      },
+      shouldCancel: async () => {
+        const currentJob = await jobStore.getSyncJobById(job.id);
+        return currentJob?.status === "cancel_requested"
+          ? currentJob.errorMessage ?? "Sycamore sync canceled by admin request."
+          : false;
       },
       onProgress: async (progress) => {
         await jobStore.updateRunningSyncJob(job.id, {
@@ -937,12 +1154,17 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
       recordsUpserted: result.recordsUpserted,
       warnings: result.warnings,
       completedAt: result.completedAt,
-      errorMessage: result.status === "failed" ? result.warnings.join("\n") || "Sycamore sync failed." : null
+      errorMessage:
+        result.status === "failed"
+          ? result.warnings.join("\n") || "Sycamore sync failed."
+          : result.status === "canceled"
+            ? result.errorMessage ?? "Sycamore sync canceled by admin request."
+            : null
     });
 
     const completedJob: SycamoreSyncJobRecord = {
       ...job,
-      status: result.status === "failed" ? "failed" : "succeeded",
+      status: result.status === "failed" ? "failed" : result.status === "canceled" ? "canceled" : "succeeded",
       resultStatus: result.status,
       syncLogId: result.syncLogId,
       recordsDiscovered: result.recordsDiscovered,
@@ -952,7 +1174,12 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
       startedAt: job.startedAt ?? result.startedAt,
       completedAt: result.completedAt,
       lastHeartbeatAt: result.completedAt,
-      errorMessage: result.status === "failed" ? result.warnings.join("\n") || "Sycamore sync failed." : null
+      errorMessage:
+        result.status === "failed"
+          ? result.warnings.join("\n") || "Sycamore sync failed."
+          : result.status === "canceled"
+            ? result.errorMessage ?? "Sycamore sync canceled by admin request."
+            : null
     };
     await appendAuditEventSafe(
       auditSink,

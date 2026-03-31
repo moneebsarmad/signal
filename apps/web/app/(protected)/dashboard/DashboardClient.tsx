@@ -113,7 +113,7 @@ interface DashboardPayload {
       recordsSynced: number;
       recordsDiscovered: number;
       recordsUpserted: number;
-      status: "running" | "success" | "partial" | "failed";
+      status: "running" | "success" | "partial" | "failed" | "canceled";
       errorMessage: string | null;
       syncMode: "initial_backfill" | "incremental" | "manual_range" | null;
       windowStartDate: string | null;
@@ -202,6 +202,14 @@ function sycamoreStatusSummary(sycamore: DashboardPayload["sycamore"]): {
       label: "Live",
       tone: "success",
       description: "The command center is using the current primary discipline source."
+    };
+  }
+
+  if (sycamore.lastSync?.status === "canceled") {
+    return {
+      label: "Canceled",
+      tone: "warning",
+      description: "The latest Sycamore sync was canceled before all queued work finished."
     };
   }
 

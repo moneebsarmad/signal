@@ -26,7 +26,7 @@ interface JobsResponse {
   jobs: ParseRun[];
 }
 
-type SycamoreSyncBatchStatus = "queued" | "running" | "success" | "partial" | "failed";
+type SycamoreSyncBatchStatus = "queued" | "running" | "canceling" | "canceled" | "success" | "partial" | "failed";
 
 interface SycamoreSyncBatch {
   batchId: string;
@@ -44,6 +44,7 @@ interface SycamoreSyncBatch {
   totalChunks: number;
   completedChunks: number;
   failedChunks: number;
+  canceledChunks: number;
   activeChunkIndex: number;
   currentWindow: {
     startDate: string;
@@ -96,6 +97,7 @@ interface JobActionResponse {
   activeSycamoreSync?: SycamoreSyncBatch | null;
   recentSycamoreSyncs?: SycamoreSyncBatch[];
   alreadyQueued?: boolean;
+  alreadyTerminal?: boolean;
   deprecated?: boolean;
   replacementPath?: string;
   error?: string;
@@ -450,6 +452,7 @@ export function IngestionClient() {
   const [isUploading, setIsUploading] = useState(false);
   const [isStartingSync, setIsStartingSync] = useState(false);
   const [isRunningWorker, setIsRunningWorker] = useState(false);
+  const [isCancelingSync, setIsCancelingSync] = useState(false);
   const [syncStartDate, setSyncStartDate] = useState(todayIsoDate);
   const [syncEndDate, setSyncEndDate] = useState(todayIsoDate);
   const [syncStudentNamesText, setSyncStudentNamesText] = useState("");
@@ -466,7 +469,8 @@ export function IngestionClient() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const warningsPanelRef = useRef<HTMLDivElement | null>(null);
   const syncProgress = syncBatch?.progress ?? null;
-  const isSyncing = isStartingSync || Boolean(syncBatch && (syncBatch.status === "queued" || syncBatch.status === "running"));
+  const isSyncing =
+    isStartingSync || Boolean(syncBatch && (syncBatch.status === "queued" || syncBatch.status === "running" || syncBatch.status === "canceling"));
 
   function setCandidateFiles(nextFiles: File[]) {
     setSelectedFiles(nextFiles);
@@ -720,6 +724,35 @@ export function IngestionClient() {
     }
   }
 
+  async function cancelSyncBatch(batchId: string) {
+    setIsCancelingSync(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/sycamore/sync/jobs", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batchId })
+      });
+      const body = (await response.json().catch(() => null)) as JobActionResponse | null;
+      if (!response.ok || !body?.sycamoreSync) {
+        throw new Error(body?.error || "Could not cancel the Sycamore sync batch.");
+      }
+
+      setSyncBatch(body.sycamoreSync);
+      setLastResult({ sycamoreSync: body.sycamoreSync });
+      setRecentSyncBatches((currentBatches) => [
+        body.sycamoreSync!,
+        ...currentBatches.filter((entry) => entry.batchId !== body.sycamoreSync?.batchId)
+      ]);
+      setSyncNow(Date.now());
+    } catch (cancelError) {
+      setError(getErrorMessage(cancelError, "Could not cancel the Sycamore sync batch."));
+    } finally {
+      setIsCancelingSync(false);
+    }
+  }
+
   function showBatchWarnings(batch: SycamoreSyncBatch) {
     setSelectedWarningBatchId(batch.batchId);
     window.requestAnimationFrame(() => {
@@ -731,7 +764,10 @@ export function IngestionClient() {
   const activeSyncBatchStatus = syncBatch?.status ?? null;
 
   useEffect(() => {
-    if (!activeSyncBatchId || (activeSyncBatchStatus !== "queued" && activeSyncBatchStatus !== "running")) {
+    if (
+      !activeSyncBatchId ||
+      (activeSyncBatchStatus !== "queued" && activeSyncBatchStatus !== "running" && activeSyncBatchStatus !== "canceling")
+    ) {
       return;
     }
 
@@ -751,7 +787,7 @@ export function IngestionClient() {
         ]);
         setSyncNow(Date.now());
 
-        if (nextBatch.status !== "queued" && nextBatch.status !== "running") {
+        if (nextBatch.status !== "queued" && nextBatch.status !== "running" && nextBatch.status !== "canceling") {
           setLastResult({ sycamoreSync: nextBatch });
           if (nextBatch.status === "failed") {
             setError(formatFailedBatchMessage(nextBatch));
@@ -792,6 +828,12 @@ export function IngestionClient() {
       if (result.status === "running") {
         return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} is running in the background. ${result.completedChunks} of ${result.totalChunks} job${result.totalChunks === 1 ? "" : "s"} finished so far.`;
       }
+      if (result.status === "canceling") {
+        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} is canceling. Remaining queued jobs will not run, and the active chunk will stop at the next safe checkpoint.`;
+      }
+      if (result.status === "canceled") {
+        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} was canceled after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. Rows written before cancel took effect remain mirrored in Supabase.`;
+      }
       if (result.status === "failed") {
         return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} finished with failures after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. ${formatFailedBatchMessage(result)}`;
       }
@@ -801,10 +843,13 @@ export function IngestionClient() {
     return null;
   }, [lastResult]);
 
-  const summaryTone = useMemo<"info" | "success" | "danger">(() => {
+  const summaryTone = useMemo<"info" | "success" | "warning" | "danger">(() => {
     const sycamoreStatus = lastResult?.sycamoreSync?.status;
     if (sycamoreStatus === "queued" || sycamoreStatus === "running") {
       return "info";
+    }
+    if (sycamoreStatus === "canceling" || sycamoreStatus === "canceled") {
+      return "warning";
     }
     if (sycamoreStatus === "failed") {
       return "danger";
@@ -819,6 +864,12 @@ export function IngestionClient() {
     }
     if (sycamoreStatus === "running") {
       return "Sycamore sync running.";
+    }
+    if (sycamoreStatus === "canceling") {
+      return "Sycamore sync canceling.";
+    }
+    if (sycamoreStatus === "canceled") {
+      return "Sycamore sync canceled.";
     }
     if (sycamoreStatus === "failed") {
       return "Sycamore sync finished with failures.";
@@ -861,18 +912,19 @@ export function IngestionClient() {
       ? syncQueuedAt
         ? `${formatDuration(syncQueuedAt, syncNow)} in queue`
         : null
-      : syncBatch?.status === "running"
+      : syncBatch?.status === "running" || syncBatch?.status === "canceling"
         ? syncStartedAt
           ? `${formatDuration(syncStartedAt, syncNow)} elapsed`
           : null
         : null;
   const syncHeartbeatLabel =
-    syncBatch?.status === "running" && syncBatch.lastHeartbeatAt
+    (syncBatch?.status === "running" || syncBatch?.status === "canceling") && syncBatch.lastHeartbeatAt
       ? syncBatch.isStalled
         ? `No heartbeat for ${formatDuration(syncBatch.lastHeartbeatAt, syncNow)}`
         : `Heartbeat ${formatDuration(syncBatch.lastHeartbeatAt, syncNow)} ago`
       : null;
   const canRunWorkerNow = Boolean(syncBatch && (syncBatch.status === "queued" || syncBatch.isStalled));
+  const canCancelSyncBatch = Boolean(syncBatch && (syncBatch.status === "queued" || syncBatch.status === "running"));
   const batchOverallProgress = syncBatch
     ? Math.min(
         1,
@@ -888,6 +940,10 @@ export function IngestionClient() {
     : (syncProgress?.stageLabel ??
         (syncBatch?.status === "queued"
           ? "Queued"
+          : syncBatch?.status === "canceling"
+            ? "Canceling"
+            : syncBatch?.status === "canceled"
+              ? "Canceled"
           : syncBatch?.status === "failed"
             ? "Failed"
             : syncBatch?.status === "success" || syncBatch?.status === "partial"
@@ -899,6 +955,10 @@ export function IngestionClient() {
     : (syncProgress?.stageDescription ??
         (syncBatch?.status === "queued"
           ? "This queued Sycamore sync will run when the daily cron advances the queue, or immediately if you use Run next job now. Queued time does not count against the 300-second worker limit."
+          : syncBatch?.status === "canceling"
+            ? "Cancel is in progress. Remaining queued jobs are being discarded, and the current chunk will stop at the next safe checkpoint."
+            : syncBatch?.status === "canceled"
+              ? "This batch was canceled before all queued jobs finished. Any rows written before cancellation remain mirrored in Supabase."
           : syncBatch?.status === "failed"
             ? formatFailedBatchDescription(syncBatch)
             : syncBatch?.status === "success" || syncBatch?.status === "partial"
@@ -906,10 +966,14 @@ export function IngestionClient() {
               : "Preparing the background Sycamore sync."));
   const syncMessage =
     syncBatch?.isStalled ?
-      `${syncBatch.lastHeartbeatAt ? `Last worker heartbeat was ${formatDuration(syncBatch.lastHeartbeatAt, syncNow)} ago.` : "The worker has not reported a heartbeat recently."} Use Run next job now to resume from the next claimable chunk.`
+      `${syncBatch.lastHeartbeatAt ? `Last worker heartbeat was ${formatDuration(syncBatch.lastHeartbeatAt, syncNow)} ago.` : "The worker has not reported a heartbeat recently."} ${syncBatch.status === "canceling" ? "Use Run next job now to finalize the cancellation." : "Use Run next job now to resume from the next claimable chunk."}`
     : (syncProgress?.message ??
         (syncBatch?.status === "queued"
           ? `Queued ${syncBatch.totalChunks} background job${syncBatch.totalChunks === 1 ? "" : "s"} for ${formatSyncWindow(syncBatch.overallWindow)}.`
+          : syncBatch?.status === "canceling"
+            ? "Cancel requested. No additional queued chunks will start."
+            : syncBatch?.status === "canceled"
+              ? `Canceled after ${syncBatch.completedChunks} of ${syncBatch.totalChunks} job${syncBatch.totalChunks === 1 ? "" : "s"} reached a terminal state.`
           : syncBatch?.status === "failed"
             ? formatFailedBatchMessage(syncBatch)
             : syncBatch?.status === "success" || syncBatch?.status === "partial"
@@ -920,7 +984,7 @@ export function IngestionClient() {
       ? "danger"
       : syncBatch?.status === "success" || syncBatch?.status === "partial"
         ? "success"
-        : syncBatch?.status === "queued"
+        : syncBatch?.status === "queued" || syncBatch?.status === "canceling" || syncBatch?.status === "canceled"
           ? "warning"
           : "info";
 
@@ -1013,7 +1077,7 @@ export function IngestionClient() {
                 <p className="text-sm text-[var(--color-muted)]">
                   {hasTargetedSyncFilters
                     ? "Student and grade filters only run with an explicit start and end date."
-                    : "Use the default action for routine refreshes and the date-range action for backfill."}
+                    : "Use the default action for routine refreshes and the date-range action for backfill. Cancel stops remaining queued work but does not roll back rows already mirrored."}
                 </p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
@@ -1056,7 +1120,28 @@ export function IngestionClient() {
                   {canRunWorkerNow ? (
                     <Button type="button" variant="secondary" size="sm" disabled={isRunningWorker} onClick={() => void runQueuedSyncJobNow()}>
                       <RefreshCcw className={cn("h-4 w-4", isRunningWorker ? "animate-spin" : "")} />
-                      {isRunningWorker ? (syncBatch.isStalled ? "Resuming..." : "Starting...") : syncBatch.isStalled ? "Resume stalled job" : "Run next job now"}
+                      {isRunningWorker
+                        ? syncBatch.status === "canceling"
+                          ? "Finalizing..."
+                          : syncBatch.isStalled
+                            ? "Resuming..."
+                            : "Starting..."
+                        : syncBatch.status === "canceling" && syncBatch.isStalled
+                          ? "Finalize cancel"
+                          : syncBatch.isStalled
+                            ? "Resume stalled job"
+                            : "Run next job now"}
+                    </Button>
+                  ) : null}
+                  {canCancelSyncBatch ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={isCancelingSync}
+                      onClick={() => void cancelSyncBatch(syncBatch.batchId)}
+                    >
+                      {isCancelingSync ? "Canceling..." : "Cancel batch"}
                     </Button>
                   ) : null}
                   <StatusBadge tone={syncStatusTone}>
@@ -1064,6 +1149,10 @@ export function IngestionClient() {
                       ? "Stalled"
                       : syncBatch.status === "queued"
                       ? "Queued"
+                      : syncBatch.status === "canceling"
+                        ? "Canceling"
+                        : syncBatch.status === "canceled"
+                          ? "Canceled"
                       : syncBatch.status === "running"
                         ? "Running"
                         : syncBatch.status === "failed"
@@ -1088,8 +1177,25 @@ export function IngestionClient() {
               {syncBatch.isStalled ? (
                 <InlineAlert tone="danger" title="This background job looks stalled.">
                   No worker heartbeat has been recorded within the expected window. The current chunk may have hit the
-                  300-second platform limit or the worker was interrupted. Use <span className="font-semibold">Resume stalled job</span> to
-                  reclaim the chunk.
+                  300-second platform limit or the worker was interrupted. Use{" "}
+                  <span className="font-semibold">
+                    {syncBatch.status === "canceling" ? "Finalize cancel" : "Resume stalled job"}
+                  </span>{" "}
+                  to reclaim the chunk.
+                </InlineAlert>
+              ) : null}
+
+              {syncBatch.status === "canceling" ? (
+                <InlineAlert tone="warning" title="Cancellation requested.">
+                  Remaining queued jobs are being discarded. The active chunk will stop at the next safe checkpoint, and
+                  rows already mirrored in Supabase will remain in place.
+                </InlineAlert>
+              ) : null}
+
+              {syncBatch.status === "canceled" ? (
+                <InlineAlert tone="warning" title="This sync batch was canceled.">
+                  The queue is cleared, but {syncBatch.recordsUpserted} mirrored row{syncBatch.recordsUpserted === 1 ? "" : "s"} written
+                  before cancel took effect remain in Supabase.
                 </InlineAlert>
               ) : null}
 
@@ -1136,7 +1242,9 @@ export function IngestionClient() {
                       {syncBatch.completedChunks} / {syncBatch.totalChunks}
                     </p>
                     <p className="mt-1 text-sm text-[var(--color-muted)]">
-                      {syncBatch.failedChunks > 0
+                      {syncBatch.canceledChunks > 0
+                        ? `${syncBatch.canceledChunks} canceled chunk${syncBatch.canceledChunks === 1 ? "" : "s"}; completed includes successful, failed, and canceled jobs.`
+                        : syncBatch.failedChunks > 0
                         ? `${syncBatch.failedChunks} failed chunk${syncBatch.failedChunks === 1 ? "" : "s"}; completed includes both successful and failed jobs.`
                         : "Each background job is written and tracked separately."}
                     </p>
@@ -1327,7 +1435,19 @@ export function IngestionClient() {
                           </div>
                         </td>
                         <td className={tableCellClassName}>
-                          <StatusBadge tone={batch.isStalled ? "danger" : batch.status === "failed" ? "danger" : batch.status === "queued" ? "warning" : batch.status === "running" ? "info" : "success"}>
+                          <StatusBadge
+                            tone={
+                              batch.isStalled
+                                ? "danger"
+                                : batch.status === "failed"
+                                  ? "danger"
+                                  : batch.status === "running"
+                                    ? "info"
+                                    : batch.status === "queued" || batch.status === "canceling" || batch.status === "canceled"
+                                      ? "warning"
+                                      : "success"
+                            }
+                          >
                             {batch.isStalled ? "stalled" : batch.status}
                           </StatusBadge>
                         </td>

@@ -110,6 +110,7 @@ export interface SycamoreDirectSyncResult {
   startedAt: string;
   completedAt: string;
   triggeredBy: string;
+  errorMessage: string | null;
 }
 
 export type SycamoreSyncStage = "roster" | "discovery" | "detail_fetch" | "upsert" | "complete" | "failed";
@@ -217,7 +218,33 @@ interface RunSycamoreDirectSyncInput {
   config?: SycamoreClientConfig;
   dependencies?: SycamoreClientDependencies;
   onProgress?: (snapshot: SycamoreSyncProgressSnapshot) => void | Promise<void>;
+  shouldCancel?: () => string | false | null | undefined | Promise<string | false | null | undefined>;
   resolvedPlan?: SycamoreDirectSyncPlan;
+}
+
+class SycamoreSyncCanceledError extends Error {
+  constructor(message = "Sycamore sync canceled by admin request.") {
+    super(message);
+    this.name = "SycamoreSyncCanceledError";
+  }
+}
+
+function isSycamoreSyncCanceledError(error: unknown): error is SycamoreSyncCanceledError {
+  return error instanceof SycamoreSyncCanceledError || (error instanceof Error && error.name === "SycamoreSyncCanceledError");
+}
+
+async function throwIfCancellationRequested(input?: RunSycamoreDirectSyncInput["shouldCancel"]): Promise<void> {
+  if (!input) {
+    return;
+  }
+
+  const result = await input();
+  if (typeof result === "string" && result.trim()) {
+    throw new SycamoreSyncCanceledError(result.trim());
+  }
+  if (result) {
+    throw new SycamoreSyncCanceledError();
+  }
 }
 
 export interface SycamoreRosterSyncResult {
@@ -1441,6 +1468,9 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
       stageProgress: number | null;
       stageDescription: string;
       message: string;
+    },
+    options?: {
+      skipCancelCheck?: boolean;
     }
   ) => {
     progressState.warningsCount = warnings.length;
@@ -1470,31 +1500,37 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
       warningsCount: progressState.warningsCount,
       message: inputStage.message
     });
+    if (!options?.skipCancelCheck) {
+      await throwIfCancellationRequested(input.shouldCancel);
+    }
   };
 
   const warnings: string[] = [];
-  await pushProgress("roster", {
-    stageProgress: 0,
-    stageDescription: "Refreshing the Sycamore roster and linking students before discipline import begins.",
-    message: "Starting roster preparation."
-  });
-  const rosterSync = await syncSycamoreRosterLinks({
-    storage,
-    store,
-    config,
-    dependencies
-  });
-  progressState.rosterStudentsFetched = rosterSync.fetchedStudents;
-  progressState.rosterStudentsUpserted = rosterSync.upsertedStudents;
-  progressState.rosterStudentsLinked = rosterSync.linkedStudents;
-  warnings.push(...rosterSync.warnings);
-  await pushProgress("roster", {
-    stageProgress: 1,
-    stageDescription: "Refreshing the Sycamore roster and linking students before discipline import begins.",
-    message: `Roster ready: ${rosterSync.upsertedStudents} students refreshed, ${rosterSync.linkedStudents} linked locally.`
-  });
+  let rosterSync = emptyRosterSyncResult();
 
   try {
+    await pushProgress("roster", {
+      stageProgress: 0,
+      stageDescription: "Refreshing the Sycamore roster and linking students before discipline import begins.",
+      message: "Starting roster preparation."
+    });
+    rosterSync = await syncSycamoreRosterLinks({
+      storage,
+      store,
+      config,
+      dependencies
+    });
+    progressState.rosterStudentsFetched = rosterSync.fetchedStudents;
+    progressState.rosterStudentsUpserted = rosterSync.upsertedStudents;
+    progressState.rosterStudentsLinked = rosterSync.linkedStudents;
+    warnings.push(...rosterSync.warnings);
+    await pushProgress("roster", {
+      stageProgress: 1,
+      stageDescription: "Refreshing the Sycamore roster and linking students before discipline import begins.",
+      message: `Roster ready: ${rosterSync.upsertedStudents} students refreshed, ${rosterSync.linkedStudents} linked locally.`
+    });
+
+    await throwIfCancellationRequested(input.shouldCancel);
     await pushProgress("discovery", {
       stageProgress: null,
       stageDescription: "Collecting the set of discipline records that match this sync window.",
@@ -1610,6 +1646,8 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
           return;
         }
 
+        await throwIfCancellationRequested(input.shouldCancel);
+
         const entry = fetched.records[index] as Record<string, unknown>;
         const studentId = listEntryStudentId(entry);
         const logId = listEntryLogId(entry);
@@ -1682,6 +1720,7 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
           ? "No rows needed to be written for this sync."
           : `Writing ${records.length} normalized record${records.length === 1 ? "" : "s"} to Supabase.`
     });
+    await throwIfCancellationRequested(input.shouldCancel);
     await store.upsertDisciplineLogs(records);
     progressState.recordsUpserted = records.length;
     await pushProgress("upsert", {
@@ -1731,15 +1770,59 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
       },
       startedAt: syncLog.startedAt,
       completedAt,
-      triggeredBy: input.triggeredBy
+      triggeredBy: input.triggeredBy,
+      errorMessage: null
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Sycamore sync failure.";
     const completedAt = new Date().toISOString();
+    if (isSycamoreSyncCanceledError(error)) {
+      warnings.push(`sycamore_sync_canceled:${message}`);
+      await pushProgress("failed", {
+        stageProgress: null,
+        stageDescription: "The sync was canceled before completion.",
+        message
+      }, {
+        skipCancelCheck: true
+      });
+
+      await store.updateSyncLog(syncLog.id, {
+        completedAt,
+        status: "canceled",
+        recordsDiscovered: progressState.discoveredRecords,
+        recordsSynced: progressState.recordsUpserted,
+        recordsUpserted: progressState.recordsUpserted,
+        errorMessage: message
+      });
+
+      return {
+        syncLogId: syncLog.id,
+        status: "canceled",
+        syncMode: plan.syncMode,
+        window: plan.window,
+        recordsDiscovered: progressState.discoveredRecords,
+        recordsUpserted: progressState.recordsUpserted,
+        warnings,
+        rosterSync: {
+          attempted: rosterSync.attempted,
+          fetchedStudents: rosterSync.fetchedStudents,
+          upsertedStudents: rosterSync.upsertedStudents,
+          linkedStudents: rosterSync.linkedStudents,
+          linkedDisciplineLogs: rosterSync.linkedDisciplineLogs
+        },
+        startedAt: syncLog.startedAt,
+        completedAt,
+        triggeredBy: input.triggeredBy,
+        errorMessage: message
+      };
+    }
+
     await pushProgress("failed", {
       stageProgress: null,
       stageDescription: "The sync stopped before completion.",
       message
+    }, {
+      skipCancelCheck: true
     });
 
     await store.updateSyncLog(syncLog.id, {

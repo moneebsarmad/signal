@@ -5,11 +5,14 @@ import type { AuditEvent } from "@syc/domain";
 import type { SycamoreStore } from "../lib/sycamore-direct-store";
 import type { SycamoreSyncProgressSnapshot } from "../lib/sycamore-direct-sync";
 import {
+  cancelSycamoreSyncBatch,
   enqueueSycamoreSyncBatch,
   runNextQueuedSycamoreSyncJob,
   summarizeSycamoreSyncBatch,
   type SycamoreSyncJobRecord
 } from "../lib/sycamore-sync-jobs";
+
+type JobStore = NonNullable<NonNullable<Parameters<typeof runNextQueuedSycamoreSyncJob>[0]>["jobStore"]>;
 
 function withEnv<T>(updates: Record<string, string | undefined>, run: () => Promise<T> | T): Promise<T> | T {
   const previous: Record<string, string | undefined> = {};
@@ -115,6 +118,41 @@ function makeJob(overrides: Partial<SycamoreSyncJobRecord> = {}): SycamoreSyncJo
   };
 }
 
+function createJobStoreStub(overrides: Partial<JobStore> = {}): JobStore {
+  const jobStore: JobStore = {
+    async ensureSchema() {},
+    async createSyncJobs(_inputs) {
+      return [];
+    },
+    async listSyncJobs(_limit) {
+      return [];
+    },
+    async listSyncJobsByBatch(_batchId) {
+      return [];
+    },
+    async listActiveSyncJobs() {
+      return [];
+    },
+    async getSyncJobById(_id) {
+      return null;
+    },
+    async claimNextSyncJob(_staleBeforeIso) {
+      return null;
+    },
+    async cancelSyncBatch(_batchId, _options) {
+      return [];
+    },
+    async updateRunningSyncJob(_id, _patch) {},
+    async completeSyncJob(_id, _patch) {},
+    async failSyncJob(_id, _patch) {}
+  };
+
+  return {
+    ...jobStore,
+    ...overrides
+  };
+}
+
 function createMinimalSyncStore(): SycamoreStore {
   return {
     async ensureSchema() {},
@@ -156,42 +194,47 @@ function createMinimalSyncStore(): SycamoreStore {
 }
 
 test("summarizeSycamoreSyncBatch reports the active running job and aggregate counts", () => {
-  const summary = summarizeSycamoreSyncBatch([
-    makeJob({
-      id: "job_0",
-      sequenceIndex: 0,
-      totalJobs: 3,
-      status: "succeeded",
-      resultStatus: "success",
-      syncLogId: "sync_0",
-      startedAt: "2026-03-20T12:00:00.000Z",
-      completedAt: "2026-03-20T12:01:00.000Z",
-      recordsDiscovered: 4,
-      recordsUpserted: 4,
-      window: { startDate: "2026-03-01", endDate: "2026-03-14" }
-    }),
-    makeJob({
-      id: "job_1",
-      sequenceIndex: 1,
-      totalJobs: 3,
-      status: "running",
-      syncLogId: "sync_1",
-      progress: makeProgress(),
-      startedAt: "2026-03-20T12:02:00.000Z",
-      recordsDiscovered: 7,
-      recordsUpserted: 0,
-      warnings: ["detail_retry:1"],
-      warningsCount: 1,
-      window: { startDate: "2026-03-15", endDate: "2026-03-28" }
-    }),
-    makeJob({
-      id: "job_2",
-      sequenceIndex: 2,
-      totalJobs: 3,
-      status: "queued",
-      window: { startDate: "2026-03-29", endDate: "2026-03-31" }
-    })
-  ]);
+  const summary = summarizeSycamoreSyncBatch(
+    [
+      makeJob({
+        id: "job_0",
+        sequenceIndex: 0,
+        totalJobs: 3,
+        status: "succeeded",
+        resultStatus: "success",
+        syncLogId: "sync_0",
+        startedAt: "2026-03-20T12:00:00.000Z",
+        completedAt: "2026-03-20T12:01:00.000Z",
+        recordsDiscovered: 4,
+        recordsUpserted: 4,
+        window: { startDate: "2026-03-01", endDate: "2026-03-14" }
+      }),
+      makeJob({
+        id: "job_1",
+        sequenceIndex: 1,
+        totalJobs: 3,
+        status: "running",
+        syncLogId: "sync_1",
+        progress: makeProgress(),
+        startedAt: "2026-03-20T12:02:00.000Z",
+        recordsDiscovered: 7,
+        recordsUpserted: 0,
+        warnings: ["detail_retry:1"],
+        warningsCount: 1,
+        window: { startDate: "2026-03-15", endDate: "2026-03-28" }
+      }),
+      makeJob({
+        id: "job_2",
+        sequenceIndex: 2,
+        totalJobs: 3,
+        status: "queued",
+        window: { startDate: "2026-03-29", endDate: "2026-03-31" }
+      })
+    ],
+    {
+      nowIso: "2026-03-20T12:10:00.000Z"
+    }
+  );
 
   assert.ok(summary);
   assert.equal(summary.createdAt, "2026-03-20T12:00:00.000Z");
@@ -310,10 +353,49 @@ test("summarizeSycamoreSyncBatch flags stale running jobs from heartbeat age", (
   assert.equal(summary.isStalled, true);
 });
 
+test("summarizeSycamoreSyncBatch treats cancel_requested jobs as an active canceling batch", () => {
+  const summary = summarizeSycamoreSyncBatch([
+    makeJob({
+      id: "job_canceling_1",
+      batchId: "batch_canceling",
+      sequenceIndex: 0,
+      totalJobs: 2,
+      status: "cancel_requested",
+      syncLogId: "sync_canceling_1",
+      startedAt: "2026-03-20T12:00:00.000Z",
+      lastHeartbeatAt: "2026-03-20T12:04:00.000Z",
+      progress: makeProgress({
+        syncLogId: "sync_canceling_1",
+        updatedAt: "2026-03-20T12:04:00.000Z",
+        message: "Cancel request received."
+      }),
+      window: { startDate: "2026-03-01", endDate: "2026-03-03" }
+    }),
+    makeJob({
+      id: "job_canceling_2",
+      batchId: "batch_canceling",
+      sequenceIndex: 1,
+      totalJobs: 2,
+      status: "canceled",
+      resultStatus: "canceled",
+      completedAt: "2026-03-20T12:05:00.000Z",
+      lastHeartbeatAt: "2026-03-20T12:05:00.000Z",
+      errorMessage: "Canceled by admin@school.org.",
+      window: { startDate: "2026-03-04", endDate: "2026-03-06" }
+    })
+  ]);
+
+  assert.ok(summary);
+  assert.equal(summary.status, "canceling");
+  assert.equal(summary.completedChunks, 1);
+  assert.equal(summary.canceledChunks, 1);
+  assert.equal(summary.activeChunkIndex, 0);
+  assert.equal(summary.progress?.message, "Cancel request received.");
+});
+
 test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", async () => {
   const createdJobs: SycamoreSyncJobRecord[] = [];
-  const jobStore: NonNullable<Parameters<typeof runNextQueuedSycamoreSyncJob>[0]>["jobStore"] = {
-    async ensureSchema() {},
+  const jobStore = createJobStoreStub({
     async createSyncJobs(
       inputs: Array<{
         batchId: string;
@@ -344,28 +426,10 @@ test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", a
       createdJobs.push(...rows);
       return rows;
     },
-    async listSyncJobs() {
-      return [];
-    },
     async listSyncJobsByBatch(batchId: string) {
       return createdJobs.filter((job) => job.batchId === batchId);
-    },
-    async listActiveSyncJobs() {
-      return [];
-    },
-    async claimNextSyncJob() {
-      return null;
-    },
-    async updateRunningSyncJob(_id: string, _patch: {
-      syncLogId?: string | null;
-      progress?: unknown;
-      recordsDiscovered?: number;
-      recordsUpserted?: number;
-      warnings?: string[];
-    }) {},
-    async completeSyncJob() {},
-    async failSyncJob() {}
-  } as Parameters<typeof enqueueSycamoreSyncBatch>[0]["jobStore"];
+    }
+  });
 
   const result = await enqueueSycamoreSyncBatch({
     request: {
@@ -401,8 +465,7 @@ test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", a
 
 test("enqueueSycamoreSyncBatch also chunks wide incremental gaps into 3-day windows", async () => {
   const createdJobs: SycamoreSyncJobRecord[] = [];
-  const jobStore = {
-    async ensureSchema() {},
+  const jobStore = createJobStoreStub({
     async createSyncJobs(
       inputs: Array<{
         batchId: string;
@@ -433,22 +496,10 @@ test("enqueueSycamoreSyncBatch also chunks wide incremental gaps into 3-day wind
       createdJobs.push(...rows);
       return rows;
     },
-    async listSyncJobs() {
-      return [];
-    },
     async listSyncJobsByBatch(batchId: string) {
       return createdJobs.filter((job) => job.batchId === batchId);
-    },
-    async listActiveSyncJobs() {
-      return [];
-    },
-    async claimNextSyncJob() {
-      return null;
-    },
-    async updateRunningSyncJob() {},
-    async completeSyncJob() {},
-    async failSyncJob() {}
-  } as Parameters<typeof enqueueSycamoreSyncBatch>[0]["jobStore"];
+    }
+  });
 
   await withEnv(
     {
@@ -526,13 +577,9 @@ test("enqueueSycamoreSyncBatch reuses the active batch instead of queuing a dupl
   ];
   let createCalls = 0;
 
-  const jobStore = {
-    async ensureSchema() {},
+  const jobStore = createJobStoreStub({
     async createSyncJobs() {
       createCalls += 1;
-      return [];
-    },
-    async listSyncJobs() {
       return [];
     },
     async listSyncJobsByBatch(batchId: string) {
@@ -540,14 +587,8 @@ test("enqueueSycamoreSyncBatch reuses the active batch instead of queuing a dupl
     },
     async listActiveSyncJobs() {
       return activeJobs;
-    },
-    async claimNextSyncJob() {
-      return null;
-    },
-    async updateRunningSyncJob() {},
-    async completeSyncJob() {},
-    async failSyncJob() {}
-  } as Parameters<typeof enqueueSycamoreSyncBatch>[0]["jobStore"];
+    }
+  });
 
   const result = await enqueueSycamoreSyncBatch({
     triggeredBy: "manual",
@@ -565,8 +606,7 @@ test("enqueueSycamoreSyncBatch reuses the active batch instead of queuing a dupl
 test("enqueueSycamoreSyncBatch appends an audit event for the queued batch", async () => {
   const createdJobs: SycamoreSyncJobRecord[] = [];
   const auditEvents: AuditEvent[] = [];
-  const jobStore = {
-    async ensureSchema() {},
+  const jobStore = createJobStoreStub({
     async createSyncJobs(
       inputs: Array<{
         batchId: string;
@@ -597,22 +637,10 @@ test("enqueueSycamoreSyncBatch appends an audit event for the queued batch", asy
       createdJobs.push(...rows);
       return rows;
     },
-    async listSyncJobs() {
-      return [];
-    },
     async listSyncJobsByBatch(batchId: string) {
       return createdJobs.filter((job) => job.batchId === batchId);
-    },
-    async listActiveSyncJobs() {
-      return [];
-    },
-    async claimNextSyncJob() {
-      return null;
-    },
-    async updateRunningSyncJob() {},
-    async completeSyncJob() {},
-    async failSyncJob() {}
-  } as Parameters<typeof enqueueSycamoreSyncBatch>[0]["jobStore"];
+    }
+  });
 
   const result = await enqueueSycamoreSyncBatch({
     request: {
@@ -636,6 +664,88 @@ test("enqueueSycamoreSyncBatch appends an audit event for the queued batch", asy
   assert.equal(auditEvents[0]?.entityId, result.batch.batchId);
   assert.equal(auditEvents[0]?.actor, "admin@school.org");
   assert.match(auditEvents[0]?.payloadJson ?? "", /"totalChunks":2/);
+});
+
+test("cancelSycamoreSyncBatch marks queued jobs canceled and running jobs cancel_requested", async () => {
+  const auditEvents: AuditEvent[] = [];
+  let jobs = [
+    makeJob({
+      id: "job_cancel_1",
+      batchId: "batch_cancel",
+      sequenceIndex: 0,
+      totalJobs: 2,
+      status: "running",
+      syncLogId: "sync_cancel_1",
+      startedAt: "2026-03-20T12:00:00.000Z",
+      lastHeartbeatAt: "2026-03-20T12:04:00.000Z",
+      window: { startDate: "2026-03-01", endDate: "2026-03-03" }
+    }),
+    makeJob({
+      id: "job_cancel_2",
+      batchId: "batch_cancel",
+      sequenceIndex: 1,
+      totalJobs: 2,
+      status: "queued",
+      window: { startDate: "2026-03-04", endDate: "2026-03-06" }
+    })
+  ];
+
+  const jobStore = createJobStoreStub({
+    async listSyncJobsByBatch(batchId: string) {
+      return batchId === "batch_cancel" ? jobs : [];
+    },
+    async getSyncJobById(id: string) {
+      return jobs.find((job) => job.id === id) ?? null;
+    },
+    async cancelSyncBatch(batchId: string, options: { actor: string }) {
+      const completedAt = "2026-03-20T12:05:00.000Z";
+      const cancelMessage = `Canceled by ${options.actor}.`;
+      jobs = jobs.map((job) => {
+        if (job.batchId !== batchId) {
+          return job;
+        }
+        if (job.status === "queued") {
+          return {
+            ...job,
+            status: "canceled",
+            resultStatus: "canceled",
+            completedAt,
+            lastHeartbeatAt: completedAt,
+            errorMessage: cancelMessage
+          };
+        }
+        if (job.status === "running" || job.status === "cancel_requested") {
+          return {
+            ...job,
+            status: "cancel_requested",
+            lastHeartbeatAt: completedAt,
+            errorMessage: cancelMessage
+          };
+        }
+        return job;
+      });
+      return jobs;
+    }
+  });
+
+  const result = await cancelSycamoreSyncBatch({
+    batchId: "batch_cancel",
+    actorEmail: "admin@school.org",
+    jobStore,
+    auditSink: {
+      async append(event) {
+        auditEvents.push(event);
+      }
+    }
+  });
+
+  assert.equal(result.alreadyTerminal, false);
+  assert.equal(result.batch?.status, "canceling");
+  assert.equal(result.batch?.canceledChunks, 1);
+  assert.equal(result.jobs[0]?.status, "cancel_requested");
+  assert.equal(result.jobs[0]?.errorMessage, "Canceled by admin@school.org.");
+  assert.equal(result.jobs[1]?.status, "canceled");
+  assert.deepEqual(auditEvents.map((event) => event.eventType), ["sycamore_sync_batch_cancel_requested"]);
 });
 
 test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch audit events", async () => {
@@ -662,11 +772,7 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
   });
 
   let completedJob = claimedJob;
-  const jobStore = {
-    async ensureSchema() {},
-    async createSyncJobs() {
-      return [];
-    },
+  const jobStore = createJobStoreStub({
     async listSyncJobs() {
       return [completedJob];
     },
@@ -676,15 +782,17 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
     async listActiveSyncJobs() {
       return completedJob.status === "queued" || completedJob.status === "running" ? [completedJob] : [];
     },
+    async getSyncJobById(id: string) {
+      return completedJob.id === id ? completedJob : null;
+    },
     async claimNextSyncJob() {
       return claimedJob;
     },
-    async updateRunningSyncJob() {},
     async completeSyncJob(
       id: string,
       patch: {
         syncLogId?: string | null;
-        resultStatus: "success" | "partial" | "failed";
+        resultStatus: "success" | "partial" | "failed" | "canceled";
         recordsDiscovered: number;
         recordsUpserted: number;
         warnings: string[];
@@ -695,7 +803,7 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
       completedJob = {
         ...completedJob,
         id,
-        status: patch.resultStatus === "failed" ? "failed" : "succeeded",
+        status: patch.resultStatus === "failed" ? "failed" : patch.resultStatus === "canceled" ? "canceled" : "succeeded",
         resultStatus: patch.resultStatus,
         syncLogId: patch.syncLogId ?? null,
         recordsDiscovered: patch.recordsDiscovered,
@@ -710,7 +818,7 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
     async failSyncJob() {
       throw new Error("Should not fail in this test.");
     }
-  };
+  });
 
   const result = await runNextQueuedSycamoreSyncJob({
     actorEmail: "admin@school.org",
@@ -741,7 +849,8 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
       },
       startedAt: "2026-03-20T12:00:00.000Z",
       completedAt: "2026-03-20T12:04:00.000Z",
-      triggeredBy: "manual"
+      triggeredBy: "manual",
+      errorMessage: null
     })
   });
 
@@ -754,4 +863,89 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
   assert.equal(auditEvents.every((event) => event.actor === "admin@school.org"), true);
   assert.equal(auditEvents[0]?.entityType, "sycamore_sync_job");
   assert.equal(auditEvents[2]?.entityType, "sycamore_sync_batch");
+});
+
+test("runNextQueuedSycamoreSyncJob finalizes a claimed cancel_requested job without running sync work", async () => {
+  const auditEvents: AuditEvent[] = [];
+  const syncLogUpdates: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const claimedJob = makeJob({
+    id: "job_cancel_requested_1",
+    batchId: "batch_cancel_requested",
+    sequenceIndex: 0,
+    totalJobs: 1,
+    status: "cancel_requested",
+    syncLogId: "sync_cancel_requested_1",
+    recordsDiscovered: 5,
+    recordsUpserted: 2,
+    warnings: ["detail_fetch_warning"],
+    warningsCount: 1,
+    startedAt: "2026-03-20T12:00:00.000Z",
+    lastHeartbeatAt: "2026-03-20T12:03:00.000Z",
+    errorMessage: "Canceled by admin@school.org."
+  });
+
+  let completedJob = claimedJob;
+  let runSyncCalls = 0;
+  const jobStore = createJobStoreStub({
+    async listSyncJobs() {
+      return [completedJob];
+    },
+    async listSyncJobsByBatch(batchId: string) {
+      return batchId === completedJob.batchId ? [completedJob] : [];
+    },
+    async getSyncJobById(id: string) {
+      return completedJob.id === id ? completedJob : null;
+    },
+    async claimNextSyncJob() {
+      return claimedJob;
+    },
+    async completeSyncJob(id, patch) {
+      completedJob = {
+        ...completedJob,
+        id,
+        status: "canceled",
+        resultStatus: patch.resultStatus,
+        syncLogId: patch.syncLogId ?? null,
+        recordsDiscovered: patch.recordsDiscovered,
+        recordsUpserted: patch.recordsUpserted,
+        warnings: patch.warnings,
+        warningsCount: patch.warnings.length,
+        completedAt: patch.completedAt,
+        lastHeartbeatAt: patch.completedAt,
+        errorMessage: patch.errorMessage ?? null
+      };
+    }
+  });
+
+  const result = await runNextQueuedSycamoreSyncJob({
+    actorEmail: "admin@school.org",
+    syncStore: {
+      ...createMinimalSyncStore(),
+      async updateSyncLog(id, patch) {
+        syncLogUpdates.push({ id, patch });
+      }
+    },
+    jobStore,
+    auditSink: {
+      async append(event) {
+        auditEvents.push(event);
+      }
+    },
+    runSync: async () => {
+      runSyncCalls += 1;
+      throw new Error("runSync should not be called for cancel_requested jobs.");
+    }
+  });
+
+  assert.equal(runSyncCalls, 0);
+  assert.equal(result.executed, true);
+  assert.equal(result.job?.status, "canceled");
+  assert.equal(result.batch?.status, "canceled");
+  assert.equal(syncLogUpdates.length, 1);
+  assert.equal(syncLogUpdates[0]?.id, "sync_cancel_requested_1");
+  assert.equal(syncLogUpdates[0]?.patch.status, "canceled");
+  assert.deepEqual(
+    auditEvents.map((event) => event.eventType),
+    ["sycamore_sync_job_canceled", "sycamore_sync_batch_canceled"]
+  );
 });

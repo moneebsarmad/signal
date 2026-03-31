@@ -343,6 +343,92 @@ test("runSycamoreDirectSync emits stage progress snapshots for manual syncs", as
   assert.equal(progressSnapshots.at(-1)?.detailRecordsProcessed, 1);
 });
 
+test("runSycamoreDirectSync cancels before upsert and leaves mirrored rows untouched", async () => {
+  const { store, syncLogs, disciplineLogs } = createInMemorySycamoreStore();
+  let cancelRequested = false;
+
+  await withEnv(
+    {
+      SYCAMORE_ACCESS_TOKEN: "token-123",
+      SYCAMORE_SCHOOL_ID: "1002",
+      SYCAMORE_API_BASE_URL: "https://school.sycamoreeducation.com/api/v1",
+      SYCAMORE_REQUEST_DELAY_MS: "0",
+      SYCAMORE_DISCOVERY_STRATEGY: "school_feed"
+    },
+    async () => {
+      const result = await runSycamoreDirectSync({
+        request: {
+          startDate: "2026-03-10",
+          endDate: "2026-03-10"
+        },
+        triggeredBy: "manual",
+        store,
+        shouldCancel: () => (cancelRequested ? "Canceled by admin request." : false),
+        onProgress(snapshot) {
+          if (snapshot.stage === "upsert" && snapshot.stageProgress === 0) {
+            cancelRequested = true;
+          }
+        },
+        config: {
+          baseUrl: "https://school.sycamoreeducation.com/api/v1",
+          accessToken: "token-123",
+          schoolId: "1002",
+          disciplinePathTemplate: "/School/{schoolId}/Discipline",
+          studentsPathTemplate: "/School/{schoolId}/Students",
+          timeoutMs: 2_000,
+          maxAttempts: 1,
+          retryBaseDelayMs: 1
+        },
+        dependencies: {
+          fetchImpl: async (input) => {
+            const url = String(input);
+            if (url.includes("/School/1002/Discipline") && url.includes("Date=2026-03-10")) {
+              return new Response(
+                JSON.stringify({
+                  Data: [{ LogID: "cancel-log-1", StudentID: "stu-ext-1", StudentName: "Jane Doe", Grade: "8" }]
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.endsWith("/Student/stu-ext-1/Discipline/cancel-log-1")) {
+              return new Response(
+                JSON.stringify({
+                  Data: {
+                    LogID: "cancel-log-1",
+                    StudentID: "stu-ext-1",
+                    StudentName: "Jane Doe",
+                    Grade: "8",
+                    Type: "Disrespect",
+                    Description: "Classroom disruption",
+                    Consequence: "Lunch detention",
+                    AssignedBy: "Dean Smith",
+                    Date: "03/10/2026"
+                  }
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+
+            throw new Error(`Unexpected url ${url}`);
+          },
+          sleep: async () => {}
+        }
+      });
+
+      assert.equal(result.status, "canceled");
+      assert.equal(result.errorMessage, "Canceled by admin request.");
+      assert.equal(result.recordsDiscovered, 1);
+      assert.equal(result.recordsUpserted, 0);
+      assert.equal(result.warnings.includes("sycamore_sync_canceled:Canceled by admin request."), true);
+      assert.equal(syncLogs[0]?.status, "canceled");
+      assert.equal(syncLogs[0]?.recordsDiscovered, 1);
+      assert.equal(syncLogs[0]?.recordsUpserted, 0);
+      assert.equal(syncLogs[0]?.errorMessage, "Canceled by admin request.");
+      assert.equal(disciplineLogs.length, 0);
+    }
+  );
+});
+
 test("runSycamoreDirectSync accepts camelCase discipline keys from the school feed", async () => {
   const { store, disciplineLogs } = createInMemorySycamoreStore();
 
