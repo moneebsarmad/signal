@@ -51,6 +51,9 @@ interface StudentDetail {
     grade: string;
     externalId: string | null;
   };
+  warnings: {
+    guardianContactsUnavailable: boolean;
+  };
   guardianContacts: Array<{
     id: string;
     guardianName: string | null;
@@ -504,6 +507,7 @@ export function StudentsClient({
         setIsDetailLoading(false);
         return;
       }
+      setError(null);
       setDetail(body as StudentDetail);
       setIsDetailLoading(false);
     }
@@ -521,6 +525,7 @@ export function StudentsClient({
     });
     if (detailResponse.ok) {
       const detailBody = (await detailResponse.json()) as StudentDetail;
+      setError(null);
       setDetail(detailBody);
     }
   }
@@ -712,6 +717,13 @@ export function StudentsClient({
       {error ? (
         <InlineAlert tone="danger" title="Student data could not be loaded.">
           {error}
+        </InlineAlert>
+      ) : null}
+
+      {detail?.warnings.guardianContactsUnavailable ? (
+        <InlineAlert tone="warning" title="Guardian contacts are unavailable.">
+          The student case file loaded, but parent-contact data is unavailable because the `guardian_contacts` table is
+          missing in the connected Supabase project.
         </InlineAlert>
       ) : null}
 

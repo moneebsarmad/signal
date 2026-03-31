@@ -47,6 +47,9 @@ export interface StudentDetailSnapshot {
     grade: string;
     externalId: string | null;
   };
+  warnings: {
+    guardianContactsUnavailable: boolean;
+  };
   guardianContacts: Array<{
     id: string;
     guardianName: string | null;
@@ -93,6 +96,21 @@ export const DEFAULT_STUDENT_SOURCE_TYPE: IngestionSourceType = "sycamore_api";
 
 export function normalizeStudentSourceType(value: string | undefined): IngestionSourceType {
   return DEFAULT_STUDENT_SOURCE_TYPE;
+}
+
+function isMissingGuardianContactsTableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("guardian_contacts") &&
+    (message.includes("could not find the table") ||
+      message.includes("schema cache") ||
+      message.includes('relation "guardian_contacts" does not exist') ||
+      message.includes("relation 'guardian_contacts' does not exist"))
+  );
 }
 
 function normalizeFilterValue(value: string | undefined): string {
@@ -221,6 +239,29 @@ function mapGuardianContacts(contacts: Awaited<ReturnType<StorageRepositories["g
     }));
 }
 
+async function listGuardianContactsForStudent(
+  storage: StorageRepositories,
+  studentId: string
+): Promise<{
+  contacts: Awaited<ReturnType<StorageRepositories["guardianContacts"]["listByStudent"]>>;
+  unavailable: boolean;
+}> {
+  try {
+    return {
+      contacts: await storage.guardianContacts.listByStudent(studentId),
+      unavailable: false
+    };
+  } catch (error) {
+    if (isMissingGuardianContactsTableError(error)) {
+      return {
+        contacts: [],
+        unavailable: true
+      };
+    }
+    throw error;
+  }
+}
+
 export async function buildStudentDirectoryRows(
   storage: StorageRepositories,
   filters: StudentDirectoryFilters
@@ -337,7 +378,7 @@ export async function buildStudentDetailSnapshot(
     return null;
   }
 
-  const [disciplineEvents, interventions, notifications, auditEvents, guardianContacts] = await Promise.all([
+  const [disciplineEvents, interventions, notifications, auditEvents, guardianContactsResult] = await Promise.all([
     listDisciplineEvents(storage, undefined, {
       sourceType,
       localStudentId: student.id,
@@ -346,8 +387,9 @@ export async function buildStudentDetailSnapshot(
     storage.interventions.listByStudent(student.id),
     storage.notifications.listByStudent(student.id),
     storage.auditEvents.list(),
-    storage.guardianContacts.listByStudent(student.id)
+    listGuardianContactsForStudent(storage, student.id)
   ]);
+  const guardianContacts = guardianContactsResult.contacts;
 
   const incidents = disciplineEvents
     .filter(
@@ -363,6 +405,9 @@ export async function buildStudentDetailSnapshot(
       fullName: student.fullName,
       grade: student.grade,
       externalId: student.externalId
+    },
+    warnings: {
+      guardianContactsUnavailable: guardianContactsResult.unavailable
     },
     guardianContacts: mapGuardianContacts(guardianContacts),
     incidents,

@@ -191,10 +191,43 @@ test("buildStudentDetailSnapshot returns Sycamore incident history for the selec
 
     assert.ok(detail);
     assert.equal(detail?.student.id, "stu_1");
+    assert.equal(detail?.warnings.guardianContactsUnavailable, false);
     assert.equal(detail?.incidents.length, 1);
     assert.equal(detail?.incidents[0]?.reason, "Disrespect");
     assert.equal(detail?.incidents[0]?.authorName, "Ms Smith");
     assert.equal(detail?.incidents[0]?.resolution, "Lunch detention");
+    assert.equal(detail?.interventions.length, 1);
+    assert.equal(detail?.notifications.length, 1);
+    assert.equal(detail?.auditEvents.length, 1);
+  });
+});
+
+test("buildStudentDetailSnapshot degrades gracefully when guardian_contacts is unavailable", async () => {
+  await withoutSupabaseEnv(async () => {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: seedStudents(),
+      approvedIncidents: seedIncidents(),
+      interventions: seedInterventions(),
+      notifications: seedNotifications(),
+      auditEvents: seedAuditEvents()
+    });
+
+    storage.guardianContacts.listByStudent = async () => {
+      throw new Error(
+        `Supabase filter by student id failed for table "guardian_contacts": Could not find the table 'public.guardian_contacts' in the schema cache`
+      );
+    };
+
+    const detail = await buildStudentDetailSnapshot(storage, "stu_1");
+
+    assert.ok(detail);
+    assert.equal(detail?.student.id, "stu_1");
+    assert.equal(detail?.warnings.guardianContactsUnavailable, true);
+    assert.deepEqual(detail?.guardianContacts, []);
+    assert.equal(detail?.incidents.length, 1);
     assert.equal(detail?.interventions.length, 1);
     assert.equal(detail?.notifications.length, 1);
     assert.equal(detail?.auditEvents.length, 1);
