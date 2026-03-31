@@ -30,7 +30,10 @@ export interface DashboardSnapshot {
     failedNotifications: number;
     parentOutreachDraftsPending: number;
     approvedParentOutreach: number;
-    studentsMissingParentEmailAt10To19: number;
+    studentsMissingParentEmailAt10To19: number | null;
+  };
+  warnings: {
+    guardianContactsUnavailable: boolean;
   };
   bandCounts: Array<{
     id: DemeritEscalationBandId;
@@ -102,6 +105,43 @@ function normalizeSourceType(value: string | undefined): IngestionSourceType {
   return DEFAULT_SOURCE_TYPE;
 }
 
+function isMissingGuardianContactsTableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("guardian_contacts") &&
+    (message.includes("could not find the table") ||
+      message.includes("schema cache") ||
+      message.includes('relation "guardian_contacts" does not exist') ||
+      message.includes("relation 'guardian_contacts' does not exist"))
+  );
+}
+
+async function listGuardianContactsForDashboard(
+  storage: StorageRepositories
+): Promise<{
+  contacts: Awaited<ReturnType<StorageRepositories["guardianContacts"]["list"]>>;
+  unavailable: boolean;
+}> {
+  try {
+    return {
+      contacts: await storage.guardianContacts.list(),
+      unavailable: false
+    };
+  } catch (error) {
+    if (isMissingGuardianContactsTableError(error)) {
+      return {
+        contacts: [],
+        unavailable: true
+      };
+    }
+    throw error;
+  }
+}
+
 function incrementCounter(record: Record<string, number>, key: string): void {
   record[key] = (record[key] ?? 0) + 1;
 }
@@ -154,14 +194,16 @@ export async function buildDashboardSnapshot(
   storage: StorageRepositories,
   filters: DashboardFilters
 ): Promise<DashboardSnapshot> {
-  const [parseRuns, interventions, notifications, students, disciplineEvents, guardianContacts] = await Promise.all([
+  const [parseRuns, interventions, notifications, students, disciplineEvents, guardianContactsResult] = await Promise.all([
     storage.parseRuns.list(),
     storage.interventions.list(),
     storage.notifications.list(),
     storage.students.list(),
     listDisciplineEvents(storage),
-    storage.guardianContacts.list()
+    listGuardianContactsForDashboard(storage)
   ]);
+  const guardianContacts = guardianContactsResult.contacts;
+  const guardianContactsUnavailable = guardianContactsResult.unavailable;
 
   const normalizedFilters = {
     grade: normalizeFilterValue(filters.grade),
@@ -441,12 +483,17 @@ export async function buildDashboardSnapshot(
       failedNotifications: notificationCounts.failed ?? 0,
       parentOutreachDraftsPending,
       approvedParentOutreach,
-      studentsMissingParentEmailAt10To19: actionQueue.filter(
-        (student) =>
-          student.currentBandId === "points_10_19" &&
-          student.localStudentId &&
-          !emailEnabledGuardianStudentIds.has(student.localStudentId)
-      ).length
+      studentsMissingParentEmailAt10To19: guardianContactsUnavailable
+        ? null
+        : actionQueue.filter(
+            (student) =>
+              student.currentBandId === "points_10_19" &&
+              student.localStudentId &&
+              !emailEnabledGuardianStudentIds.has(student.localStudentId)
+          ).length
+    },
+    warnings: {
+      guardianContactsUnavailable
     },
     bandCounts,
     actionQueue: actionQueueWithPosture,

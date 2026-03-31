@@ -47,7 +47,10 @@ interface DashboardPayload {
     failedNotifications: number;
     parentOutreachDraftsPending: number;
     approvedParentOutreach: number;
-    studentsMissingParentEmailAt10To19: number;
+    studentsMissingParentEmailAt10To19: number | null;
+  };
+  warnings: {
+    guardianContactsUnavailable: boolean;
   };
   bandCounts: Array<{
     id: string;
@@ -482,11 +485,15 @@ export function DashboardClient({ canManageSycamore: _canManageSycamore }: { can
                 </SoftPanel>
               </section>
 
-              {data.metrics.studentsMissingParentEmailAt10To19 > 0 ? (
+              {data.warnings.guardianContactsUnavailable ? (
+                <InlineAlert tone="warning" title="Parent contact coverage is unavailable.">
+                  The guardian contact mirror could not be read, so email coverage counts are temporarily hidden.
+                </InlineAlert>
+              ) : (data.metrics.studentsMissingParentEmailAt10To19 ?? 0) > 0 ? (
                 <InlineAlert tone="warning" title="Parent contact coverage is incomplete.">
                   {data.metrics.studentsMissingParentEmailAt10To19} student
-                  {data.metrics.studentsMissingParentEmailAt10To19 === 1 ? "" : "s"} in the 10-19 band do not currently
-                  have an email-enabled guardian contact on file.
+                  {data.metrics.studentsMissingParentEmailAt10To19 === 1 ? "" : "s"} in the 10-19 band do not
+                  currently have an email-enabled guardian contact on file.
                 </InlineAlert>
               ) : null}
 

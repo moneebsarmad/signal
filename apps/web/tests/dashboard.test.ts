@@ -154,6 +154,8 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   assert.equal(marchSnapshot.metrics.studentsTracked, 1);
   assert.equal(marchSnapshot.metrics.studentsAt10Plus, 1);
   assert.equal(marchSnapshot.metrics.incidentsTracked, 1);
+  assert.equal(marchSnapshot.metrics.studentsMissingParentEmailAt10To19, 1);
+  assert.equal(marchSnapshot.warnings.guardianContactsUnavailable, false);
   assert.equal(marchSnapshot.actionQueue[0]?.studentId, "stu_2");
   assert.equal(marchSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
   assert.match(marchSnapshot.actionQueue[0]?.parentCommunication ?? "", /phone call and an email/i);
@@ -170,4 +172,30 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
   assert.deepEqual(pdfExceptionSnapshot.parseRunSourceCounts, { manual_pdf: 1 });
+});
+
+test("buildDashboardSnapshot tolerates a missing guardian contacts table", async () => {
+  const storage = createInMemoryStorage({
+    parseRuns: seedParseRuns(),
+    rawIncidents: [],
+    reviewTasks: [],
+    students: seedStudents(),
+    approvedIncidents: seedIncidents(),
+    policies: [seedPolicy()]
+  });
+
+  storage.guardianContacts.list = async () => {
+    throw new Error(
+      `Supabase select failed for table "guardian_contacts": Could not find the table 'public.guardian_contacts' in the schema cache`
+    );
+  };
+
+  const snapshot = await buildDashboardSnapshot(storage, {
+    grade: "8"
+  });
+
+  assert.equal(snapshot.metrics.studentsTracked, 1);
+  assert.equal(snapshot.metrics.studentsMissingParentEmailAt10To19, null);
+  assert.equal(snapshot.warnings.guardianContactsUnavailable, true);
+  assert.equal(snapshot.actionQueue[0]?.studentId, "stu_2");
 });
