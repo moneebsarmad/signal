@@ -121,8 +121,6 @@ type StudentFilterState = {
 
 const DEFAULT_SOURCE_TYPE: StudentSourceTypeFilter = "all";
 const DAY_MS = 1000 * 60 * 60 * 24;
-const SEARCH_INPUT_DEBOUNCE_MS = 180;
-
 const PAGE_MODES: Array<{
   key: PageMode;
   label: string;
@@ -493,22 +491,6 @@ export function StudentsClient({
   ]);
 
   useEffect(() => {
-    const normalizedSearch = draftSearch.trim();
-    const timeoutId = window.setTimeout(() => {
-      setAppliedFilters((current) =>
-        current.search === normalizedSearch
-          ? current
-          : {
-              ...current,
-              search: normalizedSearch
-            }
-      );
-    }, SEARCH_INPUT_DEBOUNCE_MS);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [draftSearch]);
-
-  useEffect(() => {
     async function loadDetail() {
       if (pageMode !== "case_file") {
         return;
@@ -577,6 +559,19 @@ export function StudentsClient({
       grade: draftGrade.trim(),
       sourceType: draftSourceType
     });
+  }
+
+  function updateSearchValue(nextSearch: string) {
+    const normalizedSearch = nextSearch.trim();
+    setDraftSearch(nextSearch);
+    setAppliedFilters((current) =>
+      current.search === normalizedSearch
+        ? current
+        : {
+            ...current,
+            search: normalizedSearch
+          }
+    );
   }
 
   function clearFilters() {
@@ -797,7 +792,7 @@ export function StudentsClient({
               <Input
                 className="pl-11"
                 value={draftSearch}
-                onChange={(event) => setDraftSearch(event.currentTarget.value)}
+                onChange={(event) => updateSearchValue(event.currentTarget.value)}
                 placeholder="Name or partial name"
               />
             </div>
