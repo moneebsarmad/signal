@@ -417,6 +417,7 @@ export function StudentsClient({
   const [isLoading, setIsLoading] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUpdatingIntervention, setIsUpdatingIntervention] = useState<string | null>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadStudents = useCallback(async (nextFilters: typeof appliedFilters) => {
@@ -562,11 +563,18 @@ export function StudentsClient({
     setDraftSearch("");
     setDraftGrade("");
     setDraftSourceType(DEFAULT_SOURCE_TYPE);
+    setIsSearchFocused(false);
     setAppliedFilters({
       search: "",
       grade: "",
       sourceType: DEFAULT_SOURCE_TYPE
     });
+  }
+
+  function chooseSearchSuggestion(student: StudentRow) {
+    setDraftSearch(student.fullName);
+    setSelectedStudentId(student.id);
+    setIsSearchFocused(false);
   }
 
   function openCaseFile(studentId: string, nextTab: DetailTab = "overview") {
@@ -594,6 +602,7 @@ export function StudentsClient({
         : students,
     [normalizedSearch, students]
   );
+  const searchSuggestions = useMemo(() => filteredStudents.slice(0, 6), [filteredStudents]);
 
   useEffect(() => {
     if (filteredStudents.length > 0) {
@@ -797,8 +806,54 @@ export function StudentsClient({
                 className="pl-11"
                 value={draftSearch}
                 onChange={(event) => setDraftSearch(event.currentTarget.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => window.setTimeout(() => setIsSearchFocused(false), 120)}
                 placeholder="Name or partial name"
               />
+              {isSearchFocused && normalizedSearch ? (
+                <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-[1.25rem] border border-[var(--color-line)] bg-white shadow-card">
+                  {searchSuggestions.length > 0 ? (
+                    <>
+                      <div className="border-b border-[var(--color-line)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">
+                        {filteredStudents.length} matching students
+                      </div>
+                      <div className="max-h-80 overflow-y-auto p-2">
+                        {searchSuggestions.map((student) => {
+                          const band = getDemeritEscalationBand(student.totalPoints);
+                          return (
+                            <button
+                              key={student.id}
+                              type="button"
+                              className="w-full rounded-[1rem] px-4 py-3 text-left transition hover:bg-[var(--color-soft-surface)]"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                chooseSearchSuggestion(student);
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-semibold text-[var(--color-ink)]">{student.fullName}</p>
+                                  <p className="mt-1 text-sm text-[var(--color-muted)]">
+                                    Grade {student.grade} • {student.incidentCount} incidents • {student.interventionCount} interventions
+                                  </p>
+                                </div>
+                                <StatusBadge tone={band.tone}>{student.totalPoints} pts</StatusBadge>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {filteredStudents.length > searchSuggestions.length ? (
+                        <div className="border-t border-[var(--color-line)] px-4 py-2 text-sm text-[var(--color-muted)]">
+                          Keep typing to narrow the list further.
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="px-4 py-3 text-sm text-[var(--color-muted)]">No students match that name.</div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </Field>
           <Field label="Grade">
