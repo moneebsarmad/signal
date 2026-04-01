@@ -424,9 +424,6 @@ export function StudentsClient({
     setError(null);
 
     const params = new URLSearchParams();
-    if (nextFilters.search.trim()) {
-      params.set("search", nextFilters.search.trim());
-    }
     if (nextFilters.grade.trim()) {
       params.set("grade", nextFilters.grade.trim());
     }
@@ -561,19 +558,6 @@ export function StudentsClient({
     });
   }
 
-  function updateSearchValue(nextSearch: string) {
-    const normalizedSearch = nextSearch.trim();
-    setDraftSearch(nextSearch);
-    setAppliedFilters((current) =>
-      current.search === normalizedSearch
-        ? current
-        : {
-            ...current,
-            search: normalizedSearch
-          }
-    );
-  }
-
   function clearFilters() {
     setDraftSearch("");
     setDraftGrade("");
@@ -602,29 +586,49 @@ export function StudentsClient({
     () => students.find((student) => student.id === selectedStudentId) ?? null,
     [selectedStudentId, students]
   );
+  const normalizedSearch = useMemo(() => draftSearch.trim().toLowerCase(), [draftSearch]);
+  const filteredStudents = useMemo(
+    () =>
+      normalizedSearch
+        ? students.filter((student) => student.fullName.toLowerCase().includes(normalizedSearch))
+        : students,
+    [normalizedSearch, students]
+  );
 
-  const referenceEpoch = useMemo(() => latestStudentEpoch(students), [students]);
+  useEffect(() => {
+    if (filteredStudents.length > 0) {
+      const firstStudentId = filteredStudents[0]?.id ?? null;
+      setSelectedStudentId((current) =>
+        current && filteredStudents.some((student) => student.id === current) ? current : firstStudentId
+      );
+      return;
+    }
+
+    setSelectedStudentId(null);
+  }, [filteredStudents]);
+
+  const referenceEpoch = useMemo(() => latestStudentEpoch(filteredStudents), [filteredStudents]);
   const pageMetrics = useMemo(
     () => ({
-      totalStudents: students.length,
-      tenPlusStudents: students.filter((student) => student.totalPoints >= 10).length,
-      studentsWithInterventions: students.filter((student) => student.interventionCount > 0).length,
-      recentStudents: students.filter((student) => isRecentStudent(student, referenceEpoch)).length
+      totalStudents: filteredStudents.length,
+      tenPlusStudents: filteredStudents.filter((student) => student.totalPoints >= 10).length,
+      studentsWithInterventions: filteredStudents.filter((student) => student.interventionCount > 0).length,
+      recentStudents: filteredStudents.filter((student) => isRecentStudent(student, referenceEpoch)).length
     }),
-    [referenceEpoch, students]
+    [filteredStudents, referenceEpoch]
   );
 
-  const directoryRows = useMemo(() => [...students].sort(sortStudentsAlphabetically), [students]);
+  const directoryRows = useMemo(() => [...filteredStudents].sort(sortStudentsAlphabetically), [filteredStudents]);
   const riskRows = useMemo(
     () =>
-      [...students]
+      [...filteredStudents]
         .filter((student) => student.totalPoints > 0 || student.interventionCount > 0 || student.incidentCount > 0)
         .sort(sortStudentsByRisk),
-    [students]
+    [filteredStudents]
   );
   const interventionRows = useMemo(
-    () => [...students].filter((student) => student.interventionCount > 0).sort(sortStudentsByInterventionHistory),
-    [students]
+    () => [...filteredStudents].filter((student) => student.interventionCount > 0).sort(sortStudentsByInterventionHistory),
+    [filteredStudents]
   );
 
   const criticalRows = useMemo(
@@ -792,7 +796,7 @@ export function StudentsClient({
               <Input
                 className="pl-11"
                 value={draftSearch}
-                onChange={(event) => updateSearchValue(event.currentTarget.value)}
+                onChange={(event) => setDraftSearch(event.currentTarget.value)}
                 placeholder="Name or partial name"
               />
             </div>
