@@ -12,13 +12,23 @@ export default function StudentsPage({
   const mode = readParam(searchParams?.mode);
   const detailTab = readParam(searchParams?.detailTab);
   const sourceType = readParam(searchParams?.sourceType);
+  const bandId = readParam(searchParams?.bandId);
 
   return (
     <StudentsClient
       initialFilters={{
         search: readParam(searchParams?.search).trim(),
         grade: readParam(searchParams?.grade).trim(),
-        sourceType: sourceType === "manual_pdf" || sourceType === "sycamore_api" ? sourceType : "all"
+        sourceType: sourceType === "manual_pdf" || sourceType === "sycamore_api" ? sourceType : "all",
+        bandId:
+          bandId === "communication_ladder" ||
+          bandId === "below_10" ||
+          bandId === "points_10_19" ||
+          bandId === "points_20_29" ||
+          bandId === "points_35_39" ||
+          bandId === "points_40_plus"
+            ? bandId
+            : "all"
       }}
       initialMode={
         mode === "directory" || mode === "interventions" || mode === "case_file" || mode === "risk"

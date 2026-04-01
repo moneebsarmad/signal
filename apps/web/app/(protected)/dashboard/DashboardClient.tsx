@@ -32,6 +32,7 @@ import {
 import { cn } from "@/lib/cn";
 
 interface DashboardPayload {
+  generatedAt: string;
   filters: {
     grade: string;
     sourceType: string;
@@ -147,6 +148,7 @@ function compareGradesAscending(left: string, right: string) {
 
 const DEFAULT_SOURCE_TYPE = "all";
 const SOURCE_SYNC_POLL_MS = 5000;
+const DASHBOARD_POLL_MS = 30000;
 
 function syncModeLabel(value: "initial_backfill" | "incremental" | "manual_range" | null): string {
   if (value === "initial_backfill") {
@@ -321,41 +323,60 @@ function buildActionQueueGroups(rows: DashboardPayload["actionQueue"]): ActionQu
 }
 
 export function DashboardClient({ canManageSycamore }: { canManageSycamore: boolean }) {
-  const [grade, setGrade] = useState("");
-  const [sourceType, setSourceType] = useState(DEFAULT_SOURCE_TYPE);
+  const [draftGrade, setDraftGrade] = useState("");
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshingSource, setIsRefreshingSource] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const filtersRef = useRef({ grade: "", sourceType: DEFAULT_SOURCE_TYPE });
+  const [appliedFilters, setAppliedFilters] = useState({ grade: "", sourceType: DEFAULT_SOURCE_TYPE });
+  const filtersRef = useRef(appliedFilters);
   const autoRefreshStartedRef = useRef(false);
-  filtersRef.current = { grade, sourceType };
+  filtersRef.current = appliedFilters;
 
-  const loadMetrics = useCallback(async (nextFilters = filtersRef.current) => {
-    setIsLoading(true);
-    setError(null);
-    const params = new URLSearchParams();
-    if (nextFilters.grade.trim()) {
-      params.set("grade", nextFilters.grade.trim());
-    }
-    if (nextFilters.sourceType) {
-      params.set("sourceType", nextFilters.sourceType);
-    }
+  const loadMetrics = useCallback(
+    async (nextFilters = filtersRef.current, options?: { syncDraftGrade?: boolean; background?: boolean }) => {
+      if (!options?.background) {
+        setIsLoading(true);
+      }
+      setError(null);
 
-    const response = await fetch(`/api/dashboard/metrics?${params.toString()}`, { cache: "no-store" });
-    const body = (await response.json().catch(() => null)) as DashboardPayload | { error?: string } | null;
-    if (!response.ok) {
-      setError((body as { error?: string } | null)?.error || "Failed to load dashboard metrics.");
-      setIsLoading(false);
-      return;
-    }
+      try {
+        const params = new URLSearchParams();
+        if (nextFilters.grade.trim()) {
+          params.set("grade", nextFilters.grade.trim());
+        }
+        if (nextFilters.sourceType) {
+          params.set("sourceType", nextFilters.sourceType);
+        }
 
-    const snapshot = body as DashboardPayload;
-    setData(snapshot);
-    setGrade(snapshot.filters.grade);
-    setSourceType(snapshot.filters.sourceType || DEFAULT_SOURCE_TYPE);
-    setIsLoading(false);
-  }, []);
+        const response = await fetch(`/api/dashboard/metrics?${params.toString()}`, { cache: "no-store" });
+        const body = (await response.json().catch(() => null)) as DashboardPayload | { error?: string } | null;
+        if (!response.ok) {
+          setError((body as { error?: string } | null)?.error || "Failed to load dashboard metrics.");
+          return;
+        }
+
+        const snapshot = body as DashboardPayload;
+        const snapshotFilters = {
+          grade: snapshot.filters.grade,
+          sourceType: snapshot.filters.sourceType || DEFAULT_SOURCE_TYPE
+        };
+        setData(snapshot);
+        setAppliedFilters(snapshotFilters);
+        if (options?.syncDraftGrade) {
+          setDraftGrade(snapshotFilters.grade);
+        }
+      } catch (loadError) {
+        const message = loadError instanceof Error ? loadError.message : "Failed to load dashboard metrics.";
+        setError(message);
+      } finally {
+        if (!options?.background) {
+          setIsLoading(false);
+        }
+      }
+    },
+    []
+  );
 
   const refreshSycamoreSource = useCallback(async () => {
     setIsRefreshingSource(true);
@@ -405,7 +426,38 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
   }, [canManageSycamore, data?.sycamore.configured, loadMetrics, refreshSycamoreSource]);
 
   useEffect(() => {
-    void loadMetrics();
+    void loadMetrics(filtersRef.current, { syncDraftGrade: true });
+  }, [loadMetrics]);
+
+  useEffect(() => {
+    if (!data?.generatedAt || isRefreshingSource || data.sycamore.lastSync?.status === "running") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void loadMetrics(filtersRef.current, { background: true });
+    }, DASHBOARD_POLL_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [data?.generatedAt, data?.sycamore.lastSync?.status, isRefreshingSource, loadMetrics]);
+
+  useEffect(() => {
+    function refreshOnFocus() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void loadMetrics(filtersRef.current, { background: true });
+    }
+
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
   }, [loadMetrics]);
 
   useEffect(() => {
@@ -438,7 +490,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
 
   function onApplyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void loadMetrics({ grade, sourceType });
+    void loadMetrics({ grade: draftGrade, sourceType: appliedFilters.sourceType });
   }
 
   const sycamoreStatus = useMemo(() => (data ? sycamoreStatusSummary(data.sycamore) : null), [data]);
@@ -474,6 +526,22 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
     const delta = previous ? latest.incidentCount - previous.incidentCount : null;
     return { latest, delta };
   }, [data]);
+  const lastUpdatedLabel = useMemo(
+    () => (data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : null),
+    [data?.generatedAt]
+  );
+
+  function buildStudentsHref(bandId: "communication_ladder" | DashboardPayload["bandCounts"][number]["id"]) {
+    return {
+      pathname: "/students",
+      query: {
+        mode: "directory",
+        grade: appliedFilters.grade,
+        sourceType: appliedFilters.sourceType,
+        bandId
+      }
+    };
+  }
 
   return (
     <div className="space-y-6">
@@ -495,9 +563,14 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
       />
 
       <Panel className="space-y-5">
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge tone="neutral">{lastUpdatedLabel ? `Last updated ${lastUpdatedLabel}` : "Loading snapshot"}</StatusBadge>
+          <StatusBadge tone="info">Auto-refresh every 30s</StatusBadge>
+          {data?.sycamore.lastSync?.status === "running" ? <StatusBadge tone="info">5s polling during sync</StatusBadge> : null}
+        </div>
             <form onSubmit={onApplyFilters} className="grid gap-4 md:grid-cols-[1fr_auto] xl:grid-cols-[1fr_auto]">
               <Field label="Grade" hint="Leave blank for all grades.">
-                <Input value={grade} onChange={(event) => setGrade(event.currentTarget.value)} placeholder="e.g. 8" />
+                <Input value={draftGrade} onChange={(event) => setDraftGrade(event.currentTarget.value)} placeholder="e.g. 8" />
               </Field>
               <div className="flex items-end">
                 <Button type="submit" variant="primary" className="w-full xl:w-auto" disabled={isLoading}>
@@ -604,6 +677,9 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <Link href={buildStudentsHref("communication_ladder")} className={buttonStyles({ variant: "secondary" })}>
+                        Open full ladder
+                      </Link>
                       <StatusBadge tone="warning">{data.metrics.studentsAt10Plus} at 10+</StatusBadge>
                       <StatusBadge tone="info">{activeEscalationBands} active bands</StatusBadge>
                       <StatusBadge tone="danger">{data.metrics.studentsAt35Plus} at 35+</StatusBadge>
@@ -615,10 +691,11 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       const styles = handbookBandToneStyles(band.tone);
 
                       return (
-                        <article
+                        <Link
                           key={band.id}
+                          href={buildStudentsHref(band.id)}
                           className={cn(
-                            "rounded-[1.25rem] border px-4 py-4",
+                            "block rounded-[1.25rem] border px-4 py-4 transition hover:-translate-y-0.5 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]",
                             styles.card,
                             band.count === 0 ? "opacity-75" : ""
                           )}
@@ -645,7 +722,13 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                               <span className="font-semibold text-[var(--color-ink)]">Admin:</span> {band.adminAction}
                             </p>
                           </div>
-                        </article>
+                          <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/60 pt-3 text-sm">
+                            <p className="font-semibold text-[var(--color-primary)]">
+                              View {band.count} student{band.count === 1 ? "" : "s"} in this band
+                            </p>
+                            <span className="text-[var(--color-muted)]">Open in Students</span>
+                          </div>
+                        </Link>
                       );
                     })}
                   </div>
@@ -663,8 +746,8 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-3">
-                      <Link href="/students" className={buttonStyles({ variant: "secondary" })}>
-                        Open students
+                      <Link href={buildStudentsHref("communication_ladder")} className={buttonStyles({ variant: "secondary" })}>
+                        Open ladder
                       </Link>
                       <Link href="/notifications" className={buttonStyles({ variant: "ghost" })}>
                         Manage notifications

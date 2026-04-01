@@ -197,6 +197,7 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   const marchSnapshot = await buildDashboardSnapshot(storage, {
     grade: "8"
   });
+  assert.equal(Number.isNaN(Date.parse(marchSnapshot.generatedAt)), false);
   assert.equal(marchSnapshot.metrics.studentsTracked, 2);
   assert.equal(marchSnapshot.metrics.studentsAt10Plus, 2);
   assert.equal(marchSnapshot.metrics.incidentsTracked, 3);

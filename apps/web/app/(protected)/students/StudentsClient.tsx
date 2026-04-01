@@ -32,7 +32,7 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { getDemeritEscalationBand } from "@/lib/demerit-escalation";
+import { escalationBandOptions, getDemeritEscalationBand } from "@/lib/demerit-escalation";
 
 interface StudentRow {
   id: string;
@@ -113,13 +113,23 @@ type PageMode = "risk" | "directory" | "interventions" | "case_file";
 type DetailTab = "overview" | "incidents" | "interventions" | "notifications" | "audit";
 type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
 type StudentSourceTypeFilter = "all" | "manual_pdf" | "sycamore_api";
+type StudentBandFilter =
+  | "all"
+  | "communication_ladder"
+  | "below_10"
+  | "points_10_19"
+  | "points_20_29"
+  | "points_35_39"
+  | "points_40_plus";
 type StudentFilterState = {
   search: string;
   grade: string;
   sourceType: StudentSourceTypeFilter;
+  bandId: StudentBandFilter;
 };
 
 const DEFAULT_SOURCE_TYPE: StudentSourceTypeFilter = "all";
+const DEFAULT_BAND_FILTER: StudentBandFilter = "all";
 const DAY_MS = 1000 * 60 * 60 * 24;
 const PAGE_MODES: Array<{
   key: PageMode;
@@ -400,7 +410,16 @@ export function StudentsClient({
     sourceType:
       initialFilters?.sourceType === "manual_pdf" || initialFilters?.sourceType === "sycamore_api"
         ? initialFilters.sourceType
-        : DEFAULT_SOURCE_TYPE
+        : DEFAULT_SOURCE_TYPE,
+    bandId:
+      initialFilters?.bandId === "communication_ladder" ||
+      initialFilters?.bandId === "below_10" ||
+      initialFilters?.bandId === "points_10_19" ||
+      initialFilters?.bandId === "points_20_29" ||
+      initialFilters?.bandId === "points_35_39" ||
+      initialFilters?.bandId === "points_40_plus"
+        ? initialFilters.bandId
+        : DEFAULT_BAND_FILTER
   };
   const resolvedInitialMode: PageMode =
     initialMode && PAGE_MODES.some((mode) => mode.key === initialMode) ? initialMode : "risk";
@@ -408,6 +427,7 @@ export function StudentsClient({
   const [draftSearch, setDraftSearch] = useState(resolvedInitialFilters.search);
   const [draftGrade, setDraftGrade] = useState(resolvedInitialFilters.grade);
   const [draftSourceType, setDraftSourceType] = useState<StudentSourceTypeFilter>(resolvedInitialFilters.sourceType);
+  const [draftBandId, setDraftBandId] = useState<StudentBandFilter>(resolvedInitialFilters.bandId);
   const [appliedFilters, setAppliedFilters] = useState<StudentFilterState>(resolvedInitialFilters);
   const [pageMode, setPageMode] = useState<PageMode>(resolvedInitialMode);
   const [students, setStudents] = useState<StudentRow[]>([]);
@@ -429,6 +449,9 @@ export function StudentsClient({
     }
     if (nextFilters.sourceType) {
       params.set("sourceType", nextFilters.sourceType);
+    }
+    if (nextFilters.bandId && nextFilters.bandId !== DEFAULT_BAND_FILTER) {
+      params.set("bandId", nextFilters.bandId);
     }
 
     const response = await fetch(`/api/students?${params.toString()}`, { cache: "no-store" });
@@ -462,15 +485,18 @@ export function StudentsClient({
     setDraftSourceType((current) =>
       current === resolvedInitialFilters.sourceType ? current : resolvedInitialFilters.sourceType
     );
+    setDraftBandId((current) => (current === resolvedInitialFilters.bandId ? current : resolvedInitialFilters.bandId));
     setAppliedFilters((current) =>
       current.search === resolvedInitialFilters.search &&
       current.grade === resolvedInitialFilters.grade &&
-      current.sourceType === resolvedInitialFilters.sourceType
+      current.sourceType === resolvedInitialFilters.sourceType &&
+      current.bandId === resolvedInitialFilters.bandId
         ? current
         : {
             search: resolvedInitialFilters.search,
             grade: resolvedInitialFilters.grade,
-            sourceType: resolvedInitialFilters.sourceType
+            sourceType: resolvedInitialFilters.sourceType,
+            bandId: resolvedInitialFilters.bandId
           }
     );
     setPageMode((current) => (current === resolvedInitialMode ? current : resolvedInitialMode));
@@ -484,6 +510,7 @@ export function StudentsClient({
     resolvedInitialFilters.grade,
     resolvedInitialFilters.search,
     resolvedInitialFilters.sourceType,
+    resolvedInitialFilters.bandId,
     resolvedInitialMode
   ]);
 
@@ -554,7 +581,8 @@ export function StudentsClient({
     setAppliedFilters({
       search: draftSearch.trim(),
       grade: draftGrade.trim(),
-      sourceType: draftSourceType
+      sourceType: draftSourceType,
+      bandId: draftBandId
     });
   }
 
@@ -562,10 +590,12 @@ export function StudentsClient({
     setDraftSearch("");
     setDraftGrade("");
     setDraftSourceType(DEFAULT_SOURCE_TYPE);
+    setDraftBandId(DEFAULT_BAND_FILTER);
     setAppliedFilters({
       search: "",
       grade: "",
-      sourceType: DEFAULT_SOURCE_TYPE
+      sourceType: DEFAULT_SOURCE_TYPE,
+      bandId: DEFAULT_BAND_FILTER
     });
   }
 
@@ -727,6 +757,14 @@ export function StudentsClient({
     }
     return grades;
   }, [draftGrade, students]);
+  const bandOptions = useMemo(
+    () => [
+      { id: DEFAULT_BAND_FILTER, label: "All students" },
+      { id: "communication_ladder" as const, label: "Communication ladder (10+)" },
+      ...escalationBandOptions().filter((band) => band.id !== "below_10")
+    ],
+    []
+  );
 
   return (
     <div className="space-y-6">
@@ -795,7 +833,7 @@ export function StudentsClient({
           ))}
         </div>
 
-        <form onSubmit={applyFilters} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_11rem_13rem_auto_auto]">
+        <form onSubmit={applyFilters} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_11rem_15rem_auto_auto]">
           <Field label="Search">
             <div className="space-y-2">
               <div className="relative">
@@ -856,6 +894,15 @@ export function StudentsClient({
               {gradeOptions.map((grade) => (
                 <option key={grade} value={grade}>
                   Grade {grade}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Communication band">
+            <Select value={draftBandId} onChange={(event) => setDraftBandId(event.currentTarget.value as StudentBandFilter)}>
+              {bandOptions.map((band) => (
+                <option key={band.id} value={band.id}>
+                  {band.label}
                 </option>
               ))}
             </Select>

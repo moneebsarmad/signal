@@ -221,6 +221,45 @@ test("buildStudentDirectoryRows matches partial student names", async () => {
   });
 });
 
+test("buildStudentDirectoryRows filters the communication ladder and exact handbook bands", async () => {
+  await withoutSupabaseEnv(async () => {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: seedStudents(),
+      approvedIncidents: [
+        {
+          ...seedIncidents()[0]!,
+          points: 12
+        },
+        {
+          ...seedIncidents()[2]!,
+          points: 36
+        }
+      ],
+      interventions: seedInterventions(),
+      notifications: seedNotifications(),
+      auditEvents: seedAuditEvents()
+    });
+
+    const ladderRows = await buildStudentDirectoryRows(storage, { bandId: "communication_ladder" });
+    assert.equal(ladderRows.length, 2);
+    assert.deepEqual(
+      ladderRows.map((student) => student.id),
+      ["stu_2", "stu_1"]
+    );
+
+    const tenToNineteenRows = await buildStudentDirectoryRows(storage, { bandId: "points_10_19" });
+    assert.equal(tenToNineteenRows.length, 1);
+    assert.equal(tenToNineteenRows[0]?.id, "stu_1");
+
+    const thirtyFivePlusRows = await buildStudentDirectoryRows(storage, { bandId: "points_35_39" });
+    assert.equal(thirtyFivePlusRows.length, 1);
+    assert.equal(thirtyFivePlusRows[0]?.id, "stu_2");
+  });
+});
+
 test("buildStudentDetailSnapshot returns merged incident history for the selected student by default", async () => {
   await withoutSupabaseEnv(async () => {
     const storage = createInMemoryStorage({

@@ -17,6 +17,7 @@ export interface DashboardFilters {
 }
 
 export interface DashboardSnapshot {
+  generatedAt: string;
   filters: {
     grade: string;
     sourceType: string;
@@ -482,6 +483,7 @@ export async function buildDashboardSnapshot(
   }, {});
 
   return {
+    generatedAt: new Date().toISOString(),
     filters: normalizedFilters,
     metrics: {
       studentsTracked: studentAggregates.size,

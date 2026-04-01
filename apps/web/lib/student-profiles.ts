@@ -7,12 +7,14 @@ import type {
 } from "@syc/domain";
 import type { StorageRepositories } from "@syc/storage";
 
+import { getDemeritEscalationBand, type DemeritEscalationBandId } from "@/lib/demerit-escalation";
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
 
 export interface StudentDirectoryFilters {
   search?: string;
   grade?: string;
   sourceType?: StudentSourceType;
+  bandId?: StudentBandFilter;
 }
 
 export interface StudentDirectoryRow {
@@ -93,8 +95,10 @@ export interface StudentDetailSnapshot {
 }
 
 export type StudentSourceType = IngestionSourceType | "all";
+export type StudentBandFilter = "all" | "communication_ladder" | DemeritEscalationBandId;
 
 export const DEFAULT_STUDENT_SOURCE_TYPE: StudentSourceType = "all";
+export const DEFAULT_STUDENT_BAND_FILTER: StudentBandFilter = "all";
 
 export function normalizeStudentSourceType(value: string | undefined): StudentSourceType {
   if (value === "manual_pdf" || value === "sycamore_api") {
@@ -102,6 +106,21 @@ export function normalizeStudentSourceType(value: string | undefined): StudentSo
   }
 
   return DEFAULT_STUDENT_SOURCE_TYPE;
+}
+
+export function normalizeStudentBandFilter(value: string | undefined): StudentBandFilter {
+  if (
+    value === "communication_ladder" ||
+    value === "below_10" ||
+    value === "points_10_19" ||
+    value === "points_20_29" ||
+    value === "points_35_39" ||
+    value === "points_40_plus"
+  ) {
+    return value;
+  }
+
+  return DEFAULT_STUDENT_BAND_FILTER;
 }
 
 function isMissingGuardianContactsTableError(error: unknown): boolean {
@@ -275,7 +294,8 @@ export async function buildStudentDirectoryRows(
   const normalizedFilters = {
     search: normalizeFilterValue(filters.search).toLowerCase(),
     grade: normalizeFilterValue(filters.grade),
-    sourceType: filters.sourceType ?? DEFAULT_STUDENT_SOURCE_TYPE
+    sourceType: filters.sourceType ?? DEFAULT_STUDENT_SOURCE_TYPE,
+    bandId: filters.bandId ?? DEFAULT_STUDENT_BAND_FILTER
   };
   const sourceTypeFilter = normalizedFilters.sourceType === "all" ? undefined : normalizedFilters.sourceType;
 
@@ -355,6 +375,17 @@ export async function buildStudentDirectoryRows(
         interventionCount: interventionCountByStudentId.get(student.id) ?? 0,
         lastIncidentAt: aggregate?.lastIncidentAt ?? null
       };
+    })
+    .filter((student) => {
+      if (normalizedFilters.bandId === "all") {
+        return true;
+      }
+
+      if (normalizedFilters.bandId === "communication_ladder") {
+        return student.totalPoints >= 10;
+      }
+
+      return getDemeritEscalationBand(student.totalPoints).id === normalizedFilters.bandId;
     })
     .sort((left, right) => {
       if (right.totalPoints !== left.totalPoints) {
