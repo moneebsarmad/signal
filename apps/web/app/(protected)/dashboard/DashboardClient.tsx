@@ -145,7 +145,8 @@ function compareGradesAscending(left: string, right: string) {
   return left.localeCompare(right, undefined, { numeric: true });
 }
 
-const DEFAULT_SOURCE_TYPE = "sycamore_api";
+const DEFAULT_SOURCE_TYPE = "all";
+const SOURCE_SYNC_POLL_MS = 5000;
 
 function syncModeLabel(value: "initial_backfill" | "incremental" | "manual_range" | null): string {
   if (value === "initial_backfill") {
@@ -319,13 +320,15 @@ function buildActionQueueGroups(rows: DashboardPayload["actionQueue"]): ActionQu
     );
 }
 
-export function DashboardClient({ canManageSycamore: _canManageSycamore }: { canManageSycamore: boolean }) {
+export function DashboardClient({ canManageSycamore }: { canManageSycamore: boolean }) {
   const [grade, setGrade] = useState("");
   const [sourceType, setSourceType] = useState(DEFAULT_SOURCE_TYPE);
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshingSource, setIsRefreshingSource] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const filtersRef = useRef({ grade: "", sourceType: DEFAULT_SOURCE_TYPE });
+  const autoRefreshStartedRef = useRef(false);
   filtersRef.current = { grade, sourceType };
 
   const loadMetrics = useCallback(async (nextFilters = filtersRef.current) => {
@@ -354,9 +357,84 @@ export function DashboardClient({ canManageSycamore: _canManageSycamore }: { can
     setIsLoading(false);
   }, []);
 
+  const refreshSycamoreSource = useCallback(async () => {
+    setIsRefreshingSource(true);
+    try {
+      const response = await fetch("/api/sycamore/sync/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incremental: true })
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error || "Failed to refresh Sycamore source.");
+      }
+
+      const payload = await response.text();
+      const lines = payload
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; error?: string });
+      const errorLine = lines.find((line) => line.type === "error");
+      if (errorLine?.error) {
+        throw new Error(errorLine.error);
+      }
+
+      await loadMetrics(filtersRef.current);
+    } finally {
+      setIsRefreshingSource(false);
+    }
+  }, [loadMetrics]);
+
+  const refreshDashboard = useCallback(async () => {
+    if (canManageSycamore && data?.sycamore.configured) {
+      try {
+        await refreshSycamoreSource();
+        setError(null);
+      } catch (syncError) {
+        const message = syncError instanceof Error ? syncError.message : "Failed to refresh Sycamore source.";
+        setError(`Live source refresh failed. ${message}`);
+        await loadMetrics(filtersRef.current);
+      }
+      return;
+    }
+
+    await loadMetrics(filtersRef.current);
+  }, [canManageSycamore, data?.sycamore.configured, loadMetrics, refreshSycamoreSource]);
+
   useEffect(() => {
     void loadMetrics();
   }, [loadMetrics]);
+
+  useEffect(() => {
+    if (!data?.sycamore.configured) {
+      return;
+    }
+
+    if (data.sycamore.lastSync?.status === "running") {
+      const timeoutId = window.setTimeout(() => {
+        void loadMetrics(filtersRef.current);
+      }, SOURCE_SYNC_POLL_MS);
+      return () => window.clearTimeout(timeoutId);
+    }
+
+    if (!canManageSycamore || autoRefreshStartedRef.current) {
+      return;
+    }
+
+    autoRefreshStartedRef.current = true;
+    void refreshDashboard();
+  }, [
+    canManageSycamore,
+    data?.sycamore.configured,
+    data?.sycamore.lastSync?.completedAt,
+    data?.sycamore.lastSync?.id,
+    data?.sycamore.lastSync?.status,
+    loadMetrics,
+    refreshDashboard
+  ]);
 
   function onApplyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -404,9 +482,14 @@ export function DashboardClient({ canManageSycamore: _canManageSycamore }: { can
         title="Discipline command center"
         description="Use current cumulative demerit totals to see which students need parent communication now, what the admin action is at each threshold, and which discipline patterns are changing across the school."
         actions={
-          <Button type="button" variant="secondary" onClick={() => void loadMetrics()} disabled={isLoading}>
-            <RefreshCcw className={cn("h-4 w-4", isLoading ? "animate-spin" : "")} />
-            {isLoading ? "Refreshing..." : "Refresh data"}
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void refreshDashboard()}
+            disabled={isLoading || isRefreshingSource}
+          >
+            <RefreshCcw className={cn("h-4 w-4", isLoading || isRefreshingSource ? "animate-spin" : "")} />
+            {isRefreshingSource ? "Refreshing live source..." : isLoading ? "Refreshing..." : "Refresh data"}
           </Button>
         }
       />
@@ -427,6 +510,12 @@ export function DashboardClient({ canManageSycamore: _canManageSycamore }: { can
       {error ? (
         <InlineAlert tone="danger" title="Dashboard metrics could not be loaded.">
           {error}
+        </InlineAlert>
+      ) : null}
+
+      {isRefreshingSource ? (
+        <InlineAlert tone="info" title="Refreshing Sycamore source.">
+          The dashboard is running an incremental sync so the mirrored metrics catch up to the latest source data.
         </InlineAlert>
       ) : null}
 

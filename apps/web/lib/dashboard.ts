@@ -9,9 +9,11 @@ import {
 } from "@/lib/demerit-escalation";
 import { parseRunStatusSummary } from "@/lib/policies";
 
+export type DashboardSourceType = IngestionSourceType | "all";
+
 export interface DashboardFilters {
   grade?: string;
-  sourceType?: IngestionSourceType;
+  sourceType?: DashboardSourceType;
 }
 
 export interface DashboardSnapshot {
@@ -95,13 +97,16 @@ interface StudentAggregate {
   latestIncidentAt: string | null;
 }
 
-const DEFAULT_SOURCE_TYPE: IngestionSourceType = "sycamore_api";
+const DEFAULT_SOURCE_TYPE: DashboardSourceType = "all";
 
 function normalizeFilterValue(value: string | undefined): string {
   return value?.trim() || "";
 }
 
-function normalizeSourceType(value: string | undefined): IngestionSourceType {
+function normalizeSourceType(value: string | undefined): DashboardSourceType {
+  if (value === "manual_pdf" || value === "sycamore_api") {
+    return value;
+  }
   return DEFAULT_SOURCE_TYPE;
 }
 
@@ -209,6 +214,7 @@ export async function buildDashboardSnapshot(
     grade: normalizeFilterValue(filters.grade),
     sourceType: filters.sourceType ?? DEFAULT_SOURCE_TYPE
   };
+  const sourceTypeFilter = normalizedFilters.sourceType === "all" ? null : normalizedFilters.sourceType;
 
   const studentsById = new Map(students.map((student) => [student.id, student] as const));
   const filteredEvents = disciplineEvents.filter((event) => {
@@ -216,7 +222,10 @@ export async function buildDashboardSnapshot(
     if (normalizedFilters.grade && grade !== normalizedFilters.grade) {
       return false;
     }
-    return event.sourceType === normalizedFilters.sourceType;
+    if (sourceTypeFilter && event.sourceType !== sourceTypeFilter) {
+      return false;
+    }
+    return true;
   });
 
   const studentAggregates = new Map<string, StudentAggregate>();
@@ -347,8 +356,10 @@ export async function buildDashboardSnapshot(
       return left.fullName.localeCompare(right.fullName);
     });
 
-  const scopedLocalStudentIds = new Set(
-    actionQueue.map((student) => student.localStudentId).filter((value): value is string => Boolean(value))
+  const workflowScopedStudentIds = new Set(
+    students
+      .filter((student) => !normalizedFilters.grade || student.grade === normalizedFilters.grade)
+      .map((student) => student.id)
   );
   const emailEnabledGuardianStudentIds = new Set(
     guardianContacts
@@ -359,7 +370,7 @@ export async function buildDashboardSnapshot(
   const interventionCounts: Record<string, number> = {};
   const activeInterventionCountByStudent = new Map<string, number>();
   for (const intervention of interventions) {
-    if (!scopedLocalStudentIds.has(intervention.studentId)) {
+    if (!workflowScopedStudentIds.has(intervention.studentId)) {
       continue;
     }
     incrementCounter(interventionCounts, intervention.status);
@@ -377,7 +388,7 @@ export async function buildDashboardSnapshot(
   let parentOutreachDraftsPending = 0;
   let approvedParentOutreach = 0;
   for (const notification of notifications) {
-    if (!scopedLocalStudentIds.has(notification.studentId)) {
+    if (!workflowScopedStudentIds.has(notification.studentId)) {
       continue;
     }
     incrementCounter(notificationCounts, notification.status);
@@ -462,7 +473,9 @@ export async function buildDashboardSnapshot(
     .slice(0, 8)
     .reverse();
 
-  const filteredParseRuns = parseRuns.filter((parseRun) => parseRun.sourceType === normalizedFilters.sourceType);
+  const filteredParseRuns = parseRuns.filter((parseRun) =>
+    sourceTypeFilter ? parseRun.sourceType === sourceTypeFilter : true
+  );
   const parseRunSourceCounts = filteredParseRuns.reduce<Record<string, number>>((acc, parseRun) => {
     acc[parseRun.sourceType] = (acc[parseRun.sourceType] ?? 0) + 1;
     return acc;

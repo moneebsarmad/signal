@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ApprovedIncident, ParseRun, Policy, Student } from "@syc/domain";
+import type { ApprovedIncident, Intervention, Notification, ParseRun, Policy, Student } from "@syc/domain";
 
 import { buildDashboardSnapshot, readDashboardFilters } from "../lib/dashboard";
 import { createInMemoryStorage } from "./review-actions.test";
@@ -33,6 +33,15 @@ function seedStudents(): Student[] {
       id: "stu_2",
       externalId: "student-2",
       fullName: "John Roe",
+      grade: "8",
+      active: true,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z"
+    },
+    {
+      id: "stu_3",
+      externalId: "student-3",
+      fullName: "Jamie Poe",
       grade: "8",
       active: true,
       createdAt: "2026-03-01T00:00:00.000Z",
@@ -133,9 +142,44 @@ function seedParseRuns(): ParseRun[] {
   ];
 }
 
-test("readDashboardFilters defaults the dashboard to Sycamore when no source is supplied", () => {
+function seedInterventions(): Intervention[] {
+  return [
+    {
+      id: "int_1",
+      studentId: "stu_3",
+      policyVersion: 1,
+      milestoneLabel: "Parent outreach",
+      status: "open",
+      dueDate: "2026-03-12T00:00:00.000Z",
+      completedAt: null,
+      assignedTo: "Dean",
+      notes: "Needs follow-up."
+    }
+  ];
+}
+
+function seedNotifications(): Notification[] {
+  return [
+    {
+      id: "notif_1",
+      studentId: "stu_3",
+      interventionId: "int_1",
+      channel: "email",
+      recipient: "family3@example.com",
+      status: "queued",
+      providerId: "provider_1",
+      sentAt: null,
+      error: "",
+      kind: "parent_outreach",
+      draftSubject: "Parent outreach",
+      draftBody: "Please contact the school."
+    }
+  ];
+}
+
+test("readDashboardFilters defaults the dashboard to merged sources when no source is supplied", () => {
   const filters = readDashboardFilters(new URLSearchParams("grade=8&from=2026-03-01&to=2026-03-31"));
-  assert.equal(filters.sourceType, "sycamore_api");
+  assert.equal(filters.sourceType, "all");
 });
 
 test("buildDashboardSnapshot surfaces cumulative escalation posture for the live source slice", async () => {
@@ -145,21 +189,26 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
     reviewTasks: [],
     students: seedStudents(),
     approvedIncidents: seedIncidents(),
-    policies: [seedPolicy()]
+    policies: [seedPolicy()],
+    interventions: seedInterventions(),
+    notifications: seedNotifications()
   });
 
   const marchSnapshot = await buildDashboardSnapshot(storage, {
     grade: "8"
   });
-  assert.equal(marchSnapshot.metrics.studentsTracked, 1);
-  assert.equal(marchSnapshot.metrics.studentsAt10Plus, 1);
-  assert.equal(marchSnapshot.metrics.incidentsTracked, 1);
-  assert.equal(marchSnapshot.metrics.studentsMissingParentEmailAt10To19, 1);
+  assert.equal(marchSnapshot.metrics.studentsTracked, 2);
+  assert.equal(marchSnapshot.metrics.studentsAt10Plus, 2);
+  assert.equal(marchSnapshot.metrics.incidentsTracked, 3);
+  assert.equal(marchSnapshot.metrics.totalPoints, 27);
+  assert.equal(marchSnapshot.metrics.openInterventions, 1);
+  assert.equal(marchSnapshot.metrics.queuedNotifications, 1);
+  assert.equal(marchSnapshot.metrics.studentsMissingParentEmailAt10To19, 2);
   assert.equal(marchSnapshot.warnings.guardianContactsUnavailable, false);
-  assert.equal(marchSnapshot.actionQueue[0]?.studentId, "stu_2");
+  assert.equal(marchSnapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(marchSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
   assert.match(marchSnapshot.actionQueue[0]?.parentCommunication ?? "", /phone call and an email/i);
-  assert.deepEqual(marchSnapshot.parseRunSourceCounts, { sycamore_api: 1 });
+  assert.deepEqual(marchSnapshot.parseRunSourceCounts, { manual_pdf: 1, sycamore_api: 1 });
 
   const pdfExceptionSnapshot = await buildDashboardSnapshot(storage, {
     grade: "8",
@@ -181,7 +230,9 @@ test("buildDashboardSnapshot tolerates a missing guardian contacts table", async
     reviewTasks: [],
     students: seedStudents(),
     approvedIncidents: seedIncidents(),
-    policies: [seedPolicy()]
+    policies: [seedPolicy()],
+    interventions: seedInterventions(),
+    notifications: seedNotifications()
   });
 
   storage.guardianContacts.list = async () => {
@@ -194,8 +245,8 @@ test("buildDashboardSnapshot tolerates a missing guardian contacts table", async
     grade: "8"
   });
 
-  assert.equal(snapshot.metrics.studentsTracked, 1);
+  assert.equal(snapshot.metrics.studentsTracked, 2);
   assert.equal(snapshot.metrics.studentsMissingParentEmailAt10To19, null);
   assert.equal(snapshot.warnings.guardianContactsUnavailable, true);
-  assert.equal(snapshot.actionQueue[0]?.studentId, "stu_2");
+  assert.equal(snapshot.actionQueue[0]?.studentId, "stu_1");
 });
