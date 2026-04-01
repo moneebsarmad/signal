@@ -417,7 +417,6 @@ export function StudentsClient({
   const [isLoading, setIsLoading] = useState(false);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isUpdatingIntervention, setIsUpdatingIntervention] = useState<string | null>(null);
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadStudents = useCallback(async (nextFilters: typeof appliedFilters) => {
@@ -563,7 +562,6 @@ export function StudentsClient({
     setDraftSearch("");
     setDraftGrade("");
     setDraftSourceType(DEFAULT_SOURCE_TYPE);
-    setIsSearchFocused(false);
     setAppliedFilters({
       search: "",
       grade: "",
@@ -574,7 +572,6 @@ export function StudentsClient({
   function chooseSearchSuggestion(student: StudentRow) {
     setDraftSearch(student.fullName);
     setSelectedStudentId(student.id);
-    setIsSearchFocused(false);
   }
 
   function openCaseFile(studentId: string, nextTab: DetailTab = "overview") {
@@ -800,18 +797,18 @@ export function StudentsClient({
 
         <form onSubmit={applyFilters} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_11rem_13rem_auto_auto]">
           <Field label="Search">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-subtle)]" />
-              <Input
-                className="pl-11"
-                value={draftSearch}
-                onChange={(event) => setDraftSearch(event.currentTarget.value)}
-                onFocus={() => setIsSearchFocused(true)}
-                onBlur={() => window.setTimeout(() => setIsSearchFocused(false), 120)}
-                placeholder="Name or partial name"
-              />
-              {isSearchFocused && normalizedSearch ? (
-                <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 overflow-hidden rounded-[1.25rem] border border-[var(--color-line)] bg-white shadow-card">
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-subtle)]" />
+                <Input
+                  className="pl-11"
+                  value={draftSearch}
+                  onChange={(event) => setDraftSearch(event.currentTarget.value)}
+                  placeholder="Name or partial name"
+                />
+              </div>
+              {normalizedSearch ? (
+                <div className="overflow-hidden rounded-[1.25rem] border border-[var(--color-line)] bg-white shadow-card">
                   {searchSuggestions.length > 0 ? (
                     <>
                       <div className="border-b border-[var(--color-line)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">
@@ -825,10 +822,7 @@ export function StudentsClient({
                               key={student.id}
                               type="button"
                               className="w-full rounded-[1rem] px-4 py-3 text-left transition hover:bg-[var(--color-soft-surface)]"
-                              onMouseDown={(event) => {
-                                event.preventDefault();
-                                chooseSearchSuggestion(student);
-                              }}
+                              onClick={() => chooseSearchSuggestion(student)}
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
