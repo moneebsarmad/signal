@@ -120,6 +120,7 @@ type StudentFilterState = {
 
 const DEFAULT_SOURCE_TYPE = "sycamore_api";
 const DAY_MS = 1000 * 60 * 60 * 24;
+const SEARCH_INPUT_DEBOUNCE_MS = 180;
 
 const PAGE_MODES: Array<{
   key: PageMode;
@@ -488,6 +489,22 @@ export function StudentsClient({
   ]);
 
   useEffect(() => {
+    const normalizedSearch = draftSearch.trim();
+    const timeoutId = window.setTimeout(() => {
+      setAppliedFilters((current) =>
+        current.search === normalizedSearch
+          ? current
+          : {
+              ...current,
+              search: normalizedSearch
+            }
+      );
+    }, SEARCH_INPUT_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [draftSearch]);
+
+  useEffect(() => {
     async function loadDetail() {
       if (pageMode !== "case_file") {
         return;
@@ -770,7 +787,7 @@ export function StudentsClient({
                 className="pl-11"
                 value={draftSearch}
                 onChange={(event) => setDraftSearch(event.currentTarget.value)}
-                placeholder="Name"
+                placeholder="Name or partial name"
               />
             </div>
           </Field>

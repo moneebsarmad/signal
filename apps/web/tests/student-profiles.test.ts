@@ -174,6 +174,27 @@ test("buildStudentDirectoryRows defaults to Sycamore incidents for student total
   });
 });
 
+test("buildStudentDirectoryRows matches partial student names", async () => {
+  await withoutSupabaseEnv(async () => {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: seedStudents(),
+      approvedIncidents: seedIncidents(),
+      interventions: seedInterventions(),
+      notifications: seedNotifications(),
+      auditEvents: seedAuditEvents()
+    });
+
+    const rows = await buildStudentDirectoryRows(storage, { search: "ane" });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.id, "stu_1");
+    assert.equal(rows[0]?.fullName, "Jane Doe");
+  });
+});
+
 test("buildStudentDetailSnapshot returns Sycamore incident history for the selected student", async () => {
   await withoutSupabaseEnv(async () => {
     const storage = createInMemoryStorage({
