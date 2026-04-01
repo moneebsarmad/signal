@@ -1,3 +1,5 @@
+import { requireSession } from "@/lib/session";
+
 import { StudentsClient } from "./StudentsClient";
 
 function readParam(value: string | string[] | undefined) {
@@ -9,6 +11,7 @@ export default function StudentsPage({
 }: {
   searchParams?: Record<string, string | string[] | undefined>;
 }) {
+  const session = requireSession();
   const mode = readParam(searchParams?.mode);
   const detailTab = readParam(searchParams?.detailTab);
   const sourceType = readParam(searchParams?.sourceType);
@@ -16,6 +19,7 @@ export default function StudentsPage({
 
   return (
     <StudentsClient
+      canManageSycamore={session.role === "admin"}
       initialFilters={{
         search: readParam(searchParams?.search).trim(),
         grade: readParam(searchParams?.grade).trim(),

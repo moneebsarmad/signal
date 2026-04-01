@@ -2,7 +2,7 @@ import { requireRole } from "@/lib/session";
 import { NotificationsClient } from "./NotificationsClient";
 
 export default function NotificationsPage() {
-  requireRole(["admin"]);
+  const session = requireRole(["admin"]);
 
-  return <NotificationsClient />;
+  return <NotificationsClient canManageSycamore={session.role === "admin"} />;
 }

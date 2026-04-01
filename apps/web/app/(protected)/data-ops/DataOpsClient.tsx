@@ -17,6 +17,7 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useLiveDataRefresh } from "../useLiveDataRefresh";
 
 interface DataOpsSnapshot {
   generatedAt: string;
@@ -149,30 +150,58 @@ function syncStatusTone(
   return "success";
 }
 
-export function DataOpsClient() {
+const DATA_OPS_REALTIME_TABLES = [
+  "students",
+  "guardian_contacts",
+  "incidents_raw",
+  "incidents_approved",
+  "parse_runs",
+  "review_tasks",
+  "interventions",
+  "notifications",
+  "audit_events"
+];
+
+export function DataOpsClient({ canManageSycamore }: { canManageSycamore: boolean }) {
   const [data, setData] = useState<DataOpsSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadStatus = useCallback(async () => {
-    setIsLoading(true);
+  const loadStatus = useCallback(async (options?: { background?: boolean }) => {
+    if (!options?.background) {
+      setIsLoading(true);
+    }
     setError(null);
 
     const response = await fetch("/api/data-ops/status", { cache: "no-store" });
     const body = (await response.json().catch(() => null)) as DataOpsSnapshot | { error?: string } | null;
     if (!response.ok) {
       setError((body as { error?: string } | null)?.error || "Failed to load data operations status.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
 
     setData(body as DataOpsSnapshot);
-    setIsLoading(false);
+    if (!options?.background) {
+      setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+  const { isRefreshingSource, refreshError, refreshData } = useLiveDataRefresh({
+    canManageSycamore,
+    loadData: async () => {
+      await loadStatus();
+    },
+    backgroundLoadData: async () => {
+      await loadStatus({ background: true });
+    },
+    realtimeTables: DATA_OPS_REALTIME_TABLES
+  });
 
   const sycamoreNeedsAttention = Boolean(data?.sycamore.error);
   const systemsNeedAttention = sycamoreNeedsAttention;
@@ -184,9 +213,9 @@ export function DataOpsClient() {
         title="Data operations and system health"
         description="Track dependency health, workflow backlog, and failure signals without turning this page into a second intake dashboard."
         actions={
-          <Button type="button" variant="secondary" onClick={() => void loadStatus()} disabled={isLoading}>
-            <RefreshCcw className={cn("h-4 w-4", isLoading ? "animate-spin" : "")} />
-            {isLoading ? "Refreshing..." : "Refresh status"}
+          <Button type="button" variant="secondary" onClick={() => void refreshData()} disabled={isLoading || isRefreshingSource}>
+            <RefreshCcw className={cn("h-4 w-4", isLoading || isRefreshingSource ? "animate-spin" : "")} />
+            {isRefreshingSource ? "Refreshing live source..." : isLoading ? "Refreshing..." : "Refresh status"}
           </Button>
         }
       />
@@ -194,6 +223,16 @@ export function DataOpsClient() {
       {error ? (
         <InlineAlert tone="danger" title="Data operations status could not be loaded.">
           {error}
+        </InlineAlert>
+      ) : null}
+      {refreshError ? (
+        <InlineAlert tone="danger" title="Live source refresh failed.">
+          {refreshError}
+        </InlineAlert>
+      ) : null}
+      {isRefreshingSource ? (
+        <InlineAlert tone="info" title="Refreshing Sycamore source.">
+          Data-ops status will reload after the mirrored intake dataset catches up to the latest Sycamore source data.
         </InlineAlert>
       ) : null}
 

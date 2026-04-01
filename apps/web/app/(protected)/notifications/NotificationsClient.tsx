@@ -24,6 +24,7 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useLiveDataRefresh } from "../useLiveDataRefresh";
 
 interface NotificationConfig {
   sendStaffEmails: boolean;
@@ -102,6 +103,14 @@ const defaultConfig: NotificationConfig = {
   maxAttempts: 3,
   provider: "console"
 };
+const NOTIFICATION_REALTIME_TABLES = [
+  "students",
+  "guardian_contacts",
+  "incidents_approved",
+  "interventions",
+  "notifications",
+  "audit_events"
+];
 
 function toneForNotificationStatus(status: NotificationRow["status"]): "neutral" | "info" | "success" | "warning" | "danger" {
   switch (status) {
@@ -119,7 +128,7 @@ function toneForNotificationStatus(status: NotificationRow["status"]): "neutral"
   }
 }
 
-export function NotificationsClient() {
+export function NotificationsClient({ canManageSycamore }: { canManageSycamore: boolean }) {
   const [config, setConfig] = useState<NotificationConfig>(defaultConfig);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [parentOutreachRows, setParentOutreachRows] = useState<ParentOutreachRow[]>([]);
@@ -162,8 +171,10 @@ export function NotificationsClient() {
     setParentRecipientsInput(parentRecipientsText);
   }, [parentRecipientsText]);
 
-  async function loadData() {
-    setIsLoading(true);
+  async function loadData(options?: { background?: boolean }) {
+    if (!options?.background) {
+      setIsLoading(true);
+    }
     setError(null);
 
     const [configResponse, notificationsResponse, parentOutreachResponse, guardianContactsResponse] = await Promise.all([
@@ -193,22 +204,30 @@ export function NotificationsClient() {
 
     if (!configResponse.ok) {
       setError(configBody?.error || "Failed to load notification config.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
     if (!notificationsResponse.ok) {
       setError(notificationsBody?.error || "Failed to load notifications.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
     if (!parentOutreachResponse.ok) {
       setError(parentOutreachBody?.error || "Failed to load parent outreach queue.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
     if (!guardianContactsResponse.ok) {
       setError(guardianContactsBody?.error || "Failed to load guardian contacts.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
 
@@ -228,12 +247,24 @@ export function NotificationsClient() {
         guardianContactsUnavailable: false
       }
     );
-    setIsLoading(false);
+    if (!options?.background) {
+      setIsLoading(false);
+    }
   }
 
   useEffect(() => {
     void loadData();
   }, []);
+  const { isRefreshingSource, refreshError, refreshData } = useLiveDataRefresh({
+    canManageSycamore,
+    loadData: async () => {
+      await loadData();
+    },
+    backgroundLoadData: async () => {
+      await loadData({ background: true });
+    },
+    realtimeTables: NOTIFICATION_REALTIME_TABLES
+  });
 
   async function onSaveConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -441,9 +472,9 @@ export function NotificationsClient() {
         title="Notification operations"
         description="Triages parent outreach first, then lets you drop into the student case file for deeper review before sending."
         actions={
-          <Button type="button" variant="secondary" onClick={() => void loadData()} disabled={isLoading}>
-            <RefreshCcw className={cn("h-4 w-4", isLoading ? "animate-spin" : "")} />
-            {isLoading ? "Refreshing..." : "Refresh"}
+          <Button type="button" variant="secondary" onClick={() => void refreshData()} disabled={isLoading || isRefreshingSource}>
+            <RefreshCcw className={cn("h-4 w-4", isLoading || isRefreshingSource ? "animate-spin" : "")} />
+            {isRefreshingSource ? "Refreshing live source..." : isLoading ? "Refreshing..." : "Refresh"}
           </Button>
         }
       />
@@ -453,9 +484,20 @@ export function NotificationsClient() {
           {error}
         </InlineAlert>
       ) : null}
+      {refreshError ? (
+        <InlineAlert tone="danger" title="Live source refresh failed.">
+          {refreshError}
+        </InlineAlert>
+      ) : null}
       {message ? (
         <InlineAlert tone="success" title="Notification state updated.">
           {message}
+        </InlineAlert>
+      ) : null}
+      {isRefreshingSource ? (
+        <InlineAlert tone="info" title="Refreshing Sycamore source.">
+          Notification queues and parent-outreach drafts will reload after the mirrored discipline dataset catches up to
+          the latest source data.
         </InlineAlert>
       ) : null}
       {guardianWarnings.guardianContactsUnavailable ? (

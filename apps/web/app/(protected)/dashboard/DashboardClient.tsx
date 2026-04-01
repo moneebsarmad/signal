@@ -30,6 +30,7 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { useLiveDataRefresh } from "../useLiveDataRefresh";
 
 interface DashboardPayload {
   generatedAt: string;
@@ -147,8 +148,17 @@ function compareGradesAscending(left: string, right: string) {
 }
 
 const DEFAULT_SOURCE_TYPE = "all";
-const SOURCE_SYNC_POLL_MS = 5000;
-const DASHBOARD_POLL_MS = 30000;
+const DASHBOARD_POLL_MS = 5000;
+const DASHBOARD_REALTIME_TABLES = [
+  "students",
+  "guardian_contacts",
+  "incidents_approved",
+  "interventions",
+  "notifications",
+  "parse_runs",
+  "review_tasks",
+  "audit_events"
+];
 
 function syncModeLabel(value: "initial_backfill" | "incremental" | "manual_range" | null): string {
   if (value === "initial_backfill") {
@@ -326,11 +336,9 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
   const [draftGrade, setDraftGrade] = useState("");
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshingSource, setIsRefreshingSource] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appliedFilters, setAppliedFilters] = useState({ grade: "", sourceType: DEFAULT_SOURCE_TYPE });
   const filtersRef = useRef(appliedFilters);
-  const autoRefreshStartedRef = useRef(false);
   filtersRef.current = appliedFilters;
 
   const loadMetrics = useCallback(
@@ -378,115 +386,29 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
     []
   );
 
-  const refreshSycamoreSource = useCallback(async () => {
-    setIsRefreshingSource(true);
-    try {
-      const response = await fetch("/api/sycamore/sync/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ incremental: true })
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error || "Failed to refresh Sycamore source.");
-      }
-
-      const payload = await response.text();
-      const lines = payload
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { type?: string; error?: string });
-      const errorLine = lines.find((line) => line.type === "error");
-      if (errorLine?.error) {
-        throw new Error(errorLine.error);
-      }
-
+  const {
+    isRefreshingSource,
+    isRealtimeRefreshing,
+    lastRealtimeEventAt,
+    refreshError,
+    realtimeError,
+    realtimeStatus,
+    refreshData
+  } = useLiveDataRefresh({
+    canManageSycamore,
+    loadData: async () => {
       await loadMetrics(filtersRef.current);
-    } finally {
-      setIsRefreshingSource(false);
-    }
-  }, [loadMetrics]);
-
-  const refreshDashboard = useCallback(async () => {
-    if (canManageSycamore && data?.sycamore.configured) {
-      try {
-        await refreshSycamoreSource();
-        setError(null);
-      } catch (syncError) {
-        const message = syncError instanceof Error ? syncError.message : "Failed to refresh Sycamore source.";
-        setError(`Live source refresh failed. ${message}`);
-        await loadMetrics(filtersRef.current);
-      }
-      return;
-    }
-
-    await loadMetrics(filtersRef.current);
-  }, [canManageSycamore, data?.sycamore.configured, loadMetrics, refreshSycamoreSource]);
+    },
+    backgroundLoadData: async () => {
+      await loadMetrics(filtersRef.current, { background: true });
+    },
+    realtimeTables: DASHBOARD_REALTIME_TABLES,
+    safetyPollMs: DASHBOARD_POLL_MS
+  });
 
   useEffect(() => {
     void loadMetrics(filtersRef.current, { syncDraftGrade: true });
   }, [loadMetrics]);
-
-  useEffect(() => {
-    if (!data?.generatedAt || isRefreshingSource || data.sycamore.lastSync?.status === "running") {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void loadMetrics(filtersRef.current, { background: true });
-    }, DASHBOARD_POLL_MS);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [data?.generatedAt, data?.sycamore.lastSync?.status, isRefreshingSource, loadMetrics]);
-
-  useEffect(() => {
-    function refreshOnFocus() {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void loadMetrics(filtersRef.current, { background: true });
-    }
-
-    window.addEventListener("focus", refreshOnFocus);
-    document.addEventListener("visibilitychange", refreshOnFocus);
-    return () => {
-      window.removeEventListener("focus", refreshOnFocus);
-      document.removeEventListener("visibilitychange", refreshOnFocus);
-    };
-  }, [loadMetrics]);
-
-  useEffect(() => {
-    if (!data?.sycamore.configured) {
-      return;
-    }
-
-    if (data.sycamore.lastSync?.status === "running") {
-      const timeoutId = window.setTimeout(() => {
-        void loadMetrics(filtersRef.current);
-      }, SOURCE_SYNC_POLL_MS);
-      return () => window.clearTimeout(timeoutId);
-    }
-
-    if (!canManageSycamore || autoRefreshStartedRef.current) {
-      return;
-    }
-
-    autoRefreshStartedRef.current = true;
-    void refreshDashboard();
-  }, [
-    canManageSycamore,
-    data?.sycamore.configured,
-    data?.sycamore.lastSync?.completedAt,
-    data?.sycamore.lastSync?.id,
-    data?.sycamore.lastSync?.status,
-    loadMetrics,
-    refreshDashboard
-  ]);
 
   function onApplyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -530,6 +452,11 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
     () => (data?.generatedAt ? new Date(data.generatedAt).toLocaleString() : null),
     [data?.generatedAt]
   );
+  const lastRealtimeEventLabel = useMemo(
+    () => (lastRealtimeEventAt ? new Date(lastRealtimeEventAt).toLocaleTimeString() : null),
+    [lastRealtimeEventAt]
+  );
+  const safetyPollLabel = `${Math.max(1, Math.round(DASHBOARD_POLL_MS / 1000))}s verification`;
 
   function buildStudentsHref(bandId: "communication_ladder" | DashboardPayload["bandCounts"][number]["id"]) {
     return {
@@ -553,7 +480,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
           <Button
             type="button"
             variant="secondary"
-            onClick={() => void refreshDashboard()}
+            onClick={() => void refreshData()}
             disabled={isLoading || isRefreshingSource}
           >
             <RefreshCcw className={cn("h-4 w-4", isLoading || isRefreshingSource ? "animate-spin" : "")} />
@@ -565,8 +492,12 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
       <Panel className="space-y-5">
         <div className="flex flex-wrap gap-2">
           <StatusBadge tone="neutral">{lastUpdatedLabel ? `Last updated ${lastUpdatedLabel}` : "Loading snapshot"}</StatusBadge>
-          <StatusBadge tone="info">Auto-refresh every 30s</StatusBadge>
+          <StatusBadge tone={realtimeStatus === "live" ? "success" : "warning"}>
+            {realtimeStatus === "live" ? "Supabase signals active" : "Supabase timed refresh only"}
+          </StatusBadge>
+          <StatusBadge tone="info">{safetyPollLabel}</StatusBadge>
           {data?.sycamore.lastSync?.status === "running" ? <StatusBadge tone="info">5s polling during sync</StatusBadge> : null}
+          {lastRealtimeEventLabel ? <StatusBadge tone="neutral">{`Last DB signal ${lastRealtimeEventLabel}`}</StatusBadge> : null}
         </div>
             <form onSubmit={onApplyFilters} className="grid gap-4 md:grid-cols-[1fr_auto] xl:grid-cols-[1fr_auto]">
               <Field label="Grade" hint="Leave blank for all grades.">
@@ -585,10 +516,25 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
           {error}
         </InlineAlert>
       ) : null}
+      {refreshError ? (
+        <InlineAlert tone="danger" title="Live source refresh failed.">
+          {refreshError}
+        </InlineAlert>
+      ) : null}
+      {realtimeError ? (
+        <InlineAlert tone="warning" title="Supabase live updates are limited.">
+          {realtimeError}
+        </InlineAlert>
+      ) : null}
 
       {isRefreshingSource ? (
         <InlineAlert tone="info" title="Refreshing Sycamore source.">
           The dashboard is running an incremental sync so the mirrored metrics catch up to the latest source data.
+        </InlineAlert>
+      ) : null}
+      {isRealtimeRefreshing ? (
+        <InlineAlert tone="info" title="Refreshing from Supabase.">
+          The dashboard detected a database change and is reloading this snapshot in the background.
         </InlineAlert>
       ) : null}
 

@@ -33,6 +33,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { escalationBandOptions, getDemeritEscalationBand } from "@/lib/demerit-escalation";
+import { useLiveDataRefresh } from "../useLiveDataRefresh";
 
 interface StudentRow {
   id: string;
@@ -131,6 +132,14 @@ type StudentFilterState = {
 const DEFAULT_SOURCE_TYPE: StudentSourceTypeFilter = "all";
 const DEFAULT_BAND_FILTER: StudentBandFilter = "all";
 const DAY_MS = 1000 * 60 * 60 * 24;
+const STUDENT_REALTIME_TABLES = [
+  "students",
+  "guardian_contacts",
+  "incidents_approved",
+  "interventions",
+  "notifications",
+  "audit_events"
+];
 const PAGE_MODES: Array<{
   key: PageMode;
   label: string;
@@ -394,11 +403,13 @@ function RiskLane({
 }
 
 export function StudentsClient({
+  canManageSycamore,
   initialFilters,
   initialMode,
   initialSelectedStudentId,
   initialDetailTab
 }: {
+  canManageSycamore: boolean;
   initialFilters?: Partial<StudentFilterState>;
   initialMode?: PageMode;
   initialSelectedStudentId?: string;
@@ -439,8 +450,10 @@ export function StudentsClient({
   const [isUpdatingIntervention, setIsUpdatingIntervention] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadStudents = useCallback(async (nextFilters: typeof appliedFilters) => {
-    setIsLoading(true);
+  const loadStudents = useCallback(async (nextFilters: typeof appliedFilters, options?: { background?: boolean }) => {
+    if (!options?.background) {
+      setIsLoading(true);
+    }
     setError(null);
 
     const params = new URLSearchParams();
@@ -460,13 +473,17 @@ export function StudentsClient({
       | null;
     if (!response.ok) {
       setError(body?.error || "Failed to load students.");
-      setIsLoading(false);
+      if (!options?.background) {
+        setIsLoading(false);
+      }
       return;
     }
 
     const rows = body?.students ?? [];
     setStudents(rows);
-    setIsLoading(false);
+    if (!options?.background) {
+      setIsLoading(false);
+    }
     if (rows.length > 0) {
       const firstStudentId = rows[0]?.id ?? null;
       setSelectedStudentId((current) => (current && rows.some((row) => row.id === current) ? current : firstStudentId));
@@ -474,6 +491,52 @@ export function StudentsClient({
       setSelectedStudentId(null);
     }
   }, []);
+
+  const loadStudentDetail = useCallback(
+    async (studentId: string, options?: { showLoading?: boolean }) => {
+      const showLoading = options?.showLoading ?? true;
+      if (showLoading) {
+        setIsDetailLoading(true);
+      }
+
+      try {
+        const params = new URLSearchParams({ sourceType: appliedFilters.sourceType });
+        const response = await fetch(`/api/students/${encodeURIComponent(studentId)}?${params.toString()}`, {
+          cache: "no-store"
+        });
+        const body = (await response.json().catch(() => null)) as StudentDetail | { error?: string } | null;
+        if (!response.ok) {
+          setError((body as { error?: string } | null)?.error || "Failed to load student detail.");
+          return;
+        }
+
+        setError(null);
+        setDetail(body as StudentDetail);
+      } finally {
+        if (showLoading) {
+          setIsDetailLoading(false);
+        }
+      }
+    },
+    [appliedFilters.sourceType]
+  );
+
+  const { isRefreshingSource, refreshError, refreshData } = useLiveDataRefresh({
+    canManageSycamore,
+    loadData: async () => {
+      await loadStudents(appliedFilters);
+      if (pageMode === "case_file" && selectedStudentId) {
+        await loadStudentDetail(selectedStudentId, { showLoading: false });
+      }
+    },
+    backgroundLoadData: async () => {
+      await loadStudents(appliedFilters, { background: true });
+      if (pageMode === "case_file" && selectedStudentId) {
+        await loadStudentDetail(selectedStudentId, { showLoading: false });
+      }
+    },
+    realtimeTables: STUDENT_REALTIME_TABLES
+  });
 
   useEffect(() => {
     void loadStudents(appliedFilters);
@@ -515,46 +578,22 @@ export function StudentsClient({
   ]);
 
   useEffect(() => {
-    async function loadDetail() {
-      if (pageMode !== "case_file") {
-        return;
-      }
-      if (!selectedStudentId) {
-        setDetail(null);
-        return;
-      }
-      setIsDetailLoading(true);
-      const params = new URLSearchParams({ sourceType: appliedFilters.sourceType });
-      const response = await fetch(`/api/students/${encodeURIComponent(selectedStudentId)}?${params.toString()}`, {
-        cache: "no-store"
-      });
-      const body = (await response.json().catch(() => null)) as StudentDetail | { error?: string } | null;
-      if (!response.ok) {
-        setError((body as { error?: string } | null)?.error || "Failed to load student detail.");
-        setIsDetailLoading(false);
-        return;
-      }
-      setError(null);
-      setDetail(body as StudentDetail);
-      setIsDetailLoading(false);
+    if (pageMode !== "case_file") {
+      return;
+    }
+    if (!selectedStudentId) {
+      setDetail(null);
+      return;
     }
 
-    void loadDetail();
-  }, [appliedFilters.sourceType, pageMode, selectedStudentId]);
+    void loadStudentDetail(selectedStudentId);
+  }, [loadStudentDetail, pageMode, selectedStudentId]);
 
   async function refreshDetail() {
     if (!selectedStudentId) {
       return;
     }
-    const params = new URLSearchParams({ sourceType: appliedFilters.sourceType });
-    const detailResponse = await fetch(`/api/students/${encodeURIComponent(selectedStudentId)}?${params.toString()}`, {
-      cache: "no-store"
-    });
-    if (detailResponse.ok) {
-      const detailBody = (await detailResponse.json()) as StudentDetail;
-      setError(null);
-      setDetail(detailBody);
-    }
+    await loadStudentDetail(selectedStudentId, { showLoading: false });
   }
 
   async function updateInterventionStatus(interventionId: string, status: string) {
@@ -776,11 +815,11 @@ export function StudentsClient({
           <Button
             type="button"
             variant="secondary"
-            onClick={() => void loadStudents(appliedFilters)}
-            disabled={isLoading}
+            onClick={() => void refreshData()}
+            disabled={isLoading || isRefreshingSource}
           >
-            <RefreshCcw className={cn("h-4 w-4", isLoading ? "animate-spin" : "")} />
-            {isLoading ? "Refreshing..." : "Refresh"}
+            <RefreshCcw className={cn("h-4 w-4", isLoading || isRefreshingSource ? "animate-spin" : "")} />
+            {isRefreshingSource ? "Refreshing live source..." : isLoading ? "Refreshing..." : "Refresh"}
           </Button>
         }
       />
@@ -788,6 +827,17 @@ export function StudentsClient({
       {error ? (
         <InlineAlert tone="danger" title="Student data could not be loaded.">
           {error}
+        </InlineAlert>
+      ) : null}
+      {refreshError ? (
+        <InlineAlert tone="danger" title="Live source refresh failed.">
+          {refreshError}
+        </InlineAlert>
+      ) : null}
+      {isRefreshingSource ? (
+        <InlineAlert tone="info" title="Refreshing Sycamore source.">
+          The student workspace is running an incremental sync so mirrored incidents, totals, and case files catch up to
+          the latest source data.
         </InlineAlert>
       ) : null}
 

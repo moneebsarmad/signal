@@ -3,7 +3,7 @@ import { requireRole } from "@/lib/session";
 import { DataOpsClient } from "./DataOpsClient";
 
 export default function DataOpsPage() {
-  requireRole(["admin"]);
+  const session = requireRole(["admin"]);
 
-  return <DataOpsClient />;
+  return <DataOpsClient canManageSycamore={session.role === "admin"} />;
 }
