@@ -57,6 +57,27 @@ function seedApprovedIncident(points: number): ApprovedIncident {
   };
 }
 
+function seedManualApprovedIncident(points: number): ApprovedIncident {
+  return {
+    id: `inc_manual_${points}`,
+    studentId: "stu_1",
+    sourceType: "manual_pdf",
+    sourceRecordId: `manual_row_${String(Math.abs(points)).padStart(4, "0")}`,
+    externalStudentId: null,
+    gradeAtEvent: "8",
+    eventType: null,
+    occurredAt: "2026-02-12T00:00:00.000Z",
+    points,
+    reason: "Disrespect",
+    comment: "Talking back",
+    teacherName: "Mr. Adams",
+    sourceJobId: "run-manual-1",
+    fingerprint: `fp_manual_${points}`,
+    reviewedBy: "reviewer@school.org",
+    reviewedAt: "2026-02-12T00:00:00.000Z"
+  };
+}
+
 test("policy evaluation creates transition-only interventions and avoids duplicates", async () => {
   const storage = createInMemoryStorage({
     parseRuns: [],
@@ -106,4 +127,22 @@ test("policy recompute closes active interventions on downward correction", asyn
   const interventions = await storage.interventions.list();
   const active = interventions.filter((item) => item.status !== "completed");
   assert.equal(active.length, 0);
+});
+
+test("policy evaluation uses canonical discipline events so unmatched manual PDF approvals still trigger interventions", async () => {
+  const storage = createInMemoryStorage({
+    parseRuns: [],
+    rawIncidents: [],
+    reviewTasks: [],
+    students: [seedStudent()],
+    approvedIncidents: [seedManualApprovedIncident(12)],
+    policies: [seedPolicy()]
+  });
+
+  const summary = await evaluatePolicyAndInterventions({
+    storage,
+    actorEmail: "admin@school.org"
+  });
+
+  assert.equal(summary.triggeredInterventions, 3);
 });

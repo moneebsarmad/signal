@@ -11,13 +11,14 @@ export default function StudentsPage({
 }) {
   const mode = readParam(searchParams?.mode);
   const detailTab = readParam(searchParams?.detailTab);
+  const sourceType = readParam(searchParams?.sourceType);
 
   return (
     <StudentsClient
       initialFilters={{
         search: readParam(searchParams?.search).trim(),
         grade: readParam(searchParams?.grade).trim(),
-        sourceType: "sycamore_api"
+        sourceType: sourceType === "manual_pdf" || sourceType === "sycamore_api" ? sourceType : "all"
       }}
       initialMode={
         mode === "directory" || mode === "interventions" || mode === "case_file" || mode === "risk"

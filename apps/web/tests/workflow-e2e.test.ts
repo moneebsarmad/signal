@@ -12,7 +12,7 @@ import { createPolicyVersion, evaluatePolicyAndInterventions } from "../lib/poli
 import { applyBulkReviewAction, applyReviewAction } from "../lib/review";
 import { createInMemoryStorage } from "./review-actions.test";
 
-test.skip("upload -> review -> policy -> notify -> intervention complete flow", async () => {
+test("upload -> review -> policy -> notify -> intervention complete flow", async () => {
   const storage = createInMemoryStorage({
     parseRuns: [],
     rawIncidents: [],
@@ -139,7 +139,7 @@ test.skip("upload -> review -> policy -> notify -> intervention complete flow", 
   assert.equal(types.has("intervention_status_updated"), true);
 });
 
-test.skip("review approval automatically evaluates policy and queues notifications", async () => {
+test("review approval automatically evaluates policy and queues notifications", async () => {
   const storage = createInMemoryStorage({
     parseRuns: [],
     rawIncidents: [],

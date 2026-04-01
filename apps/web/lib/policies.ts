@@ -104,7 +104,7 @@ export async function evaluatePolicyAndInterventions(input: {
   const templates = parseInterventionTemplates(policy);
   const triggers = buildTriggerLevels(policy);
   const students = await storage.students.list();
-  const disciplineEvents = await listDisciplineEvents(storage, undefined, { sourceType: "sycamore_api" });
+  const disciplineEvents = await listDisciplineEvents(storage);
   const interventions = await storage.interventions.list();
   const now = new Date();
   const nowIso = now.toISOString();
@@ -291,7 +291,7 @@ export async function evaluatePolicyAndInterventions(input: {
 
 export async function buildStudentScores(storage: StorageRepositories): Promise<StudentScore[]> {
   const students = await storage.students.list();
-  const disciplineEvents = await listDisciplineEvents(storage, undefined, { sourceType: "sycamore_api" });
+  const disciplineEvents = await listDisciplineEvents(storage);
   const scoreByStudent = new Map<string, number>();
 
   for (const event of disciplineEvents) {

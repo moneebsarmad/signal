@@ -91,6 +91,43 @@ const DEFAULT_CONFIG: NotificationConfig = {
   provider: "console"
 };
 
+function isMissingGuardianContactsTableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("guardian_contacts") &&
+    (message.includes("could not find the table") ||
+      message.includes("schema cache") ||
+      message.includes('relation "guardian_contacts" does not exist') ||
+      message.includes("relation 'guardian_contacts' does not exist"))
+  );
+}
+
+async function listGuardianContactsSafely(
+  storage: StorageRepositories
+): Promise<{
+  contacts: GuardianContact[];
+  unavailable: boolean;
+}> {
+  try {
+    return {
+      contacts: await storage.guardianContacts.list(),
+      unavailable: false
+    };
+  } catch (error) {
+    if (isMissingGuardianContactsTableError(error)) {
+      return {
+        contacts: [],
+        unavailable: true
+      };
+    }
+    throw error;
+  }
+}
+
 function notificationKind(notification: Notification): NonNullable<Notification["kind"]> {
   return notification.kind ?? "policy";
 }
@@ -311,12 +348,13 @@ export async function queueNotificationsForInterventions(input: {
 }): Promise<NotificationQueueSummary> {
   const { storage, actorEmail } = input;
   const config = await getNotificationConfig(storage);
-  const [existingNotifications, disciplineEvents, students, allContacts] = await Promise.all([
+  const [existingNotifications, disciplineEvents, students, guardianContactsResult] = await Promise.all([
     storage.notifications.list(),
-    listDisciplineEvents(storage, undefined, { sourceType: "sycamore_api" }),
+    listDisciplineEvents(storage),
     storage.students.list(),
-    storage.guardianContacts.list()
+    listGuardianContactsSafely(storage)
   ]);
+  const allContacts = guardianContactsResult.contacts;
 
   const pointsMap = pointsByStudent(disciplineEvents);
   const latestIncidentMap = latestIncidentAtByStudent(disciplineEvents);
@@ -334,6 +372,9 @@ export async function queueNotificationsForInterventions(input: {
   let queued = 0;
   let skipped = 0;
   const warnings: string[] = [];
+  if (guardianContactsResult.unavailable && config.sendParentEmails) {
+    warnings.push("guardian_contacts_unavailable");
+  }
 
   for (const interventionId of input.interventionIds) {
     const intervention = await storage.interventions.getById(interventionId);
@@ -508,13 +549,14 @@ export async function queueNotificationsForInterventions(input: {
 export async function listParentOutreachQueue(
   storage: StorageRepositories
 ): Promise<ParentOutreachQueueRow[]> {
-  const [notifications, students, interventions, disciplineEvents, guardianContacts] = await Promise.all([
+  const [notifications, students, interventions, disciplineEvents, guardianContactsResult] = await Promise.all([
     storage.notifications.list(),
     storage.students.list(),
     storage.interventions.list(),
-    listDisciplineEvents(storage, undefined, { sourceType: "sycamore_api" }),
-    storage.guardianContacts.list()
+    listDisciplineEvents(storage),
+    listGuardianContactsSafely(storage)
   ]);
+  const guardianContacts = guardianContactsResult.contacts;
 
   const studentMap = new Map(students.map((student) => [student.id, student] as const));
   const interventionMap = new Map(interventions.map((intervention) => [intervention.id, intervention] as const));
@@ -719,7 +761,7 @@ export async function dispatchNotificationQueue(input: {
     storage.notifications.list(),
     storage.students.list(),
     storage.interventions.list(),
-    listDisciplineEvents(storage, undefined, { sourceType: "sycamore_api" })
+    listDisciplineEvents(storage)
   ]);
 
   const studentMap = new Map(students.map((student) => [student.id, student] as const));

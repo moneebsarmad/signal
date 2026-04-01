@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "typecheck": "tsc --project tsconfig.typecheck.json --noEmit",
     "test": "node --import tsx --test",
     "smoke:local": "node ./scripts/smoke-local.mjs",
     "sheets:bootstrap": "node ./scripts/bootstrap-sheets.mjs",

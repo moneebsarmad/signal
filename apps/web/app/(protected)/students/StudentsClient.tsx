@@ -112,13 +112,14 @@ interface StudentDetail {
 type PageMode = "risk" | "directory" | "interventions" | "case_file";
 type DetailTab = "overview" | "incidents" | "interventions" | "notifications" | "audit";
 type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
+type StudentSourceTypeFilter = "all" | "manual_pdf" | "sycamore_api";
 type StudentFilterState = {
   search: string;
   grade: string;
-  sourceType: "manual_pdf" | "sycamore_api";
+  sourceType: StudentSourceTypeFilter;
 };
 
-const DEFAULT_SOURCE_TYPE = "sycamore_api";
+const DEFAULT_SOURCE_TYPE: StudentSourceTypeFilter = "all";
 const DAY_MS = 1000 * 60 * 60 * 24;
 const SEARCH_INPUT_DEBOUNCE_MS = 180;
 
@@ -398,14 +399,17 @@ export function StudentsClient({
   const resolvedInitialFilters: StudentFilterState = {
     search: initialFilters?.search?.trim() ?? "",
     grade: initialFilters?.grade?.trim() ?? "",
-    sourceType: initialFilters?.sourceType === "manual_pdf" ? "manual_pdf" : DEFAULT_SOURCE_TYPE
+    sourceType:
+      initialFilters?.sourceType === "manual_pdf" || initialFilters?.sourceType === "sycamore_api"
+        ? initialFilters.sourceType
+        : DEFAULT_SOURCE_TYPE
   };
   const resolvedInitialMode: PageMode =
     initialMode && PAGE_MODES.some((mode) => mode.key === initialMode) ? initialMode : "risk";
 
   const [draftSearch, setDraftSearch] = useState(resolvedInitialFilters.search);
   const [draftGrade, setDraftGrade] = useState(resolvedInitialFilters.grade);
-  const [draftSourceType, setDraftSourceType] = useState<"manual_pdf" | "sycamore_api">(resolvedInitialFilters.sourceType);
+  const [draftSourceType, setDraftSourceType] = useState<StudentSourceTypeFilter>(resolvedInitialFilters.sourceType);
   const [appliedFilters, setAppliedFilters] = useState<StudentFilterState>(resolvedInitialFilters);
   const [pageMode, setPageMode] = useState<PageMode>(resolvedInitialMode);
   const [students, setStudents] = useState<StudentRow[]>([]);
@@ -697,6 +701,13 @@ export function StudentsClient({
     () => detail?.notifications.filter((notification) => notification.kind === "parent_outreach") ?? [],
     [detail]
   );
+  const chronologicalIncidents = useMemo(
+    () =>
+      detail
+        ? [...detail.incidents].sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))
+        : [],
+    [detail]
+  );
   const otherNotifications = useMemo(
     () => detail?.notifications.filter((notification) => notification.kind !== "parent_outreach") ?? [],
     [detail]
@@ -981,7 +992,7 @@ export function StudentsClient({
                     <p className="text-sm font-semibold text-[var(--color-ink)]">Incidents</p>
                   </div>
                   <p className="font-display text-3xl text-[var(--color-ink)]">{detail.incidents.length}</p>
-                  <p className="text-sm text-[var(--color-muted)]">Synced incident history in the active dataset.</p>
+                  <p className="text-sm text-[var(--color-muted)]">Incident history across the mirrored dataset.</p>
                 </SoftPanel>
                 <SoftPanel className="space-y-2">
                   <div className="flex items-center gap-2 text-[var(--color-primary)]">
@@ -1066,7 +1077,7 @@ export function StudentsClient({
                       </>
                     ) : (
                       <p className="text-sm text-[var(--color-muted)]">
-                        No incident history is available for this student in the active dataset.
+                        No incident history is available for this student in the mirrored dataset.
                       </p>
                     )}
                   </SoftPanel>
@@ -1119,13 +1130,13 @@ export function StudentsClient({
 
               {detailTab === "incidents" ? (
                 <div className="grid gap-4">
-                  {detail.incidents.length === 0 ? (
+                  {chronologicalIncidents.length === 0 ? (
                     <EmptyState
                       title="No incidents recorded"
-                      description="This student does not currently have any synced incidents in the active dataset."
+                      description="This student does not currently have any mirrored incidents."
                     />
                   ) : (
-                    detail.incidents.slice(0, 10).map((incident) => (
+                    chronologicalIncidents.map((incident) => (
                       <SoftPanel key={incident.id} className="space-y-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                           <div>

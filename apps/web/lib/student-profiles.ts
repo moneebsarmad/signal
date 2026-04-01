@@ -12,7 +12,7 @@ import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipli
 export interface StudentDirectoryFilters {
   search?: string;
   grade?: string;
-  sourceType?: IngestionSourceType;
+  sourceType?: StudentSourceType;
 }
 
 export interface StudentDirectoryRow {
@@ -92,9 +92,15 @@ export interface StudentDetailSnapshot {
   }>;
 }
 
-export const DEFAULT_STUDENT_SOURCE_TYPE: IngestionSourceType = "sycamore_api";
+export type StudentSourceType = IngestionSourceType | "all";
 
-export function normalizeStudentSourceType(value: string | undefined): IngestionSourceType {
+export const DEFAULT_STUDENT_SOURCE_TYPE: StudentSourceType = "all";
+
+export function normalizeStudentSourceType(value: string | undefined): StudentSourceType {
+  if (value === "manual_pdf" || value === "sycamore_api") {
+    return value;
+  }
+
   return DEFAULT_STUDENT_SOURCE_TYPE;
 }
 
@@ -271,11 +277,12 @@ export async function buildStudentDirectoryRows(
     grade: normalizeFilterValue(filters.grade),
     sourceType: filters.sourceType ?? DEFAULT_STUDENT_SOURCE_TYPE
   };
+  const sourceTypeFilter = normalizedFilters.sourceType === "all" ? undefined : normalizedFilters.sourceType;
 
   const [students, interventions, disciplineEvents] = await Promise.all([
     storage.students.list(),
     storage.interventions.list(),
-    listDisciplineEvents(storage, undefined, { sourceType: normalizedFilters.sourceType })
+    listDisciplineEvents(storage, undefined, { sourceType: sourceTypeFilter })
   ]);
 
   const studentIdByExternalId = new Map(
@@ -371,16 +378,18 @@ export async function buildStudentDirectoryRows(
 export async function buildStudentDetailSnapshot(
   storage: StorageRepositories,
   studentId: string,
-  sourceType: IngestionSourceType = DEFAULT_STUDENT_SOURCE_TYPE
+  sourceType: StudentSourceType = DEFAULT_STUDENT_SOURCE_TYPE
 ): Promise<StudentDetailSnapshot | null> {
   const student = await storage.students.getById(studentId);
   if (!student) {
     return null;
   }
 
+  const sourceTypeFilter = sourceType === "all" ? undefined : sourceType;
+
   const [disciplineEvents, interventions, notifications, auditEvents, guardianContactsResult] = await Promise.all([
     listDisciplineEvents(storage, undefined, {
-      sourceType,
+      sourceType: sourceTypeFilter,
       localStudentId: student.id,
       studentExternalId: student.externalId ?? undefined
     }),

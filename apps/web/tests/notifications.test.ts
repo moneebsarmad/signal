@@ -48,6 +48,27 @@ function seedApprovedIncident(): ApprovedIncident {
   };
 }
 
+function seedManualApprovedIncident(): ApprovedIncident {
+  return {
+    id: "inc_manual_1",
+    studentId: "stu_1",
+    sourceType: "manual_pdf",
+    sourceRecordId: "manual_row_0001",
+    externalStudentId: null,
+    gradeAtEvent: "8",
+    eventType: null,
+    occurredAt: "2026-02-12T00:00:00.000Z",
+    points: 12,
+    reason: "Disrespect",
+    comment: "Talking back",
+    teacherName: "Mr. Adams",
+    sourceJobId: "run-manual-1",
+    fingerprint: "fp_manual_1",
+    reviewedBy: "reviewer@school.org",
+    reviewedAt: "2026-02-12T00:00:00.000Z"
+  };
+}
+
 function seedSycamoreApprovedIncident(): ApprovedIncident {
   return {
     id: "inc_sycamore_1",
@@ -387,5 +408,54 @@ test("dispatchNotificationQueue scrubs recipient PII in provider logs", async ()
     const combined = logged.join("\n");
     assert.equal(combined.includes("sensitive.person@school.org"), false);
     assert.equal(combined.includes("s***@school.org"), true);
+  });
+});
+
+test("queueNotificationsForInterventions tolerates a missing guardian_contacts table", async () => {
+  await withoutSupabaseEnv(async () => {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: [seedStudent()],
+      approvedIncidents: [seedManualApprovedIncident()],
+      interventions: [seedIntervention()],
+      policies: [seedPolicy()]
+    });
+
+    storage.guardianContacts.list = async () => {
+      throw new Error(
+        `Supabase select failed for table "guardian_contacts": Could not find the table 'public.guardian_contacts' in the schema cache`
+      );
+    };
+
+    await saveNotificationConfig({
+      storage,
+      actorEmail: "admin@school.org",
+      payload: {
+        sendStaffEmails: true,
+        sendParentEmails: true,
+        staffRecipients: ["staff@school.org"],
+        parentRecipients: ["fallback@home.org"],
+        subjectTemplate: "Update {{milestoneLabel}}",
+        bodyTemplate: "Student {{studentName}} reached {{milestoneLabel}}",
+        maxAttempts: 1,
+        provider: "console"
+      }
+    });
+
+    const queued = await queueNotificationsForInterventions({
+      storage,
+      actorEmail: "admin@school.org",
+      interventionIds: ["int_1"]
+    });
+
+    assert.equal(queued.queued, 2);
+    assert.equal(queued.warnings.includes("guardian_contacts_unavailable"), true);
+
+    const parentQueue = await listParentOutreachQueue(storage);
+    assert.equal(parentQueue.length, 1);
+    assert.equal(parentQueue[0]?.guardianName, null);
+    assert.equal(parentQueue[0]?.recipient, "fallback@home.org");
   });
 });

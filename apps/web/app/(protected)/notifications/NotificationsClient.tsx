@@ -87,6 +87,10 @@ interface GuardianContactRow {
   isActive: boolean;
 }
 
+interface GuardianContactWarnings {
+  guardianContactsUnavailable: boolean;
+}
+
 const defaultConfig: NotificationConfig = {
   sendStaffEmails: false,
   sendParentEmails: false,
@@ -124,6 +128,9 @@ export function NotificationsClient() {
     totalContacts: 0,
     emailEnabledContacts: 0,
     studentsCovered: 0
+  });
+  const [guardianWarnings, setGuardianWarnings] = useState<GuardianContactWarnings>({
+    guardianContactsUnavailable: false
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -179,6 +186,7 @@ export function NotificationsClient() {
       | {
           rows?: GuardianContactRow[];
           summary?: { totalContacts: number; emailEnabledContacts: number; studentsCovered: number };
+          warnings?: GuardianContactWarnings;
           error?: string;
         }
       | null;
@@ -213,6 +221,11 @@ export function NotificationsClient() {
         totalContacts: 0,
         emailEnabledContacts: 0,
         studentsCovered: 0
+      }
+    );
+    setGuardianWarnings(
+      guardianContactsBody?.warnings ?? {
+        guardianContactsUnavailable: false
       }
     );
     setIsLoading(false);
@@ -443,6 +456,12 @@ export function NotificationsClient() {
       {message ? (
         <InlineAlert tone="success" title="Notification state updated.">
           {message}
+        </InlineAlert>
+      ) : null}
+      {guardianWarnings.guardianContactsUnavailable ? (
+        <InlineAlert tone="warning" title="Guardian contacts are unavailable.">
+          The notifications workspace loaded, but the `guardian_contacts` table is missing in the connected Supabase
+          project. Parent-contact rosters are unavailable until that schema is applied.
         </InlineAlert>
       ) : null}
 

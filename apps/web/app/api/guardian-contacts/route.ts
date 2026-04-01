@@ -3,6 +3,21 @@ import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/lib/session";
 import { createStorageAdapter, prepareStorage } from "@/lib/storage";
 
+function isMissingGuardianContactsTableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("guardian_contacts") &&
+    (message.includes("could not find the table") ||
+      message.includes("schema cache") ||
+      message.includes('relation "guardian_contacts" does not exist') ||
+      message.includes("relation 'guardian_contacts' does not exist"))
+  );
+}
+
 export async function GET() {
   const session = getCurrentSession();
   if (!session) {
@@ -11,10 +26,18 @@ export async function GET() {
 
   const storage = createStorageAdapter();
   await prepareStorage(storage);
-  const [contacts, students] = await Promise.all([
-    storage.guardianContacts.list(),
-    storage.students.list()
-  ]);
+  const students = await storage.students.list();
+  let contacts = await Promise.resolve([] as Awaited<ReturnType<typeof storage.guardianContacts.list>>);
+  let guardianContactsUnavailable = false;
+
+  try {
+    contacts = await storage.guardianContacts.list();
+  } catch (error) {
+    if (!isMissingGuardianContactsTableError(error)) {
+      throw error;
+    }
+    guardianContactsUnavailable = true;
+  }
   const studentMap = new Map(students.map((student) => [student.id, student] as const));
 
   const rows = contacts
@@ -31,5 +54,14 @@ export async function GET() {
     studentsCovered: new Set(rows.filter((contact) => contact.email && contact.isActive).map((contact) => contact.studentId)).size
   };
 
-  return NextResponse.json({ summary, rows }, { status: 200 });
+  return NextResponse.json(
+    {
+      summary,
+      rows,
+      warnings: {
+        guardianContactsUnavailable
+      }
+    },
+    { status: 200 }
+  );
 }
