@@ -43,7 +43,7 @@ interface DashboardPayload {
     incidentsTracked: number;
     totalPoints: number;
     studentsAt10Plus: number;
-    studentsAt35Plus: number;
+    studentsAt40Plus: number;
     openInterventions: number;
     queuedNotifications: number;
     failedNotifications: number;
@@ -562,8 +562,8 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                   icon={BellDot}
                 />
                 <StatCard
-                  label="Students at 35+"
-                  value={data.metrics.studentsAt35Plus}
+                  label="Students at 40+"
+                  value={data.metrics.studentsAt40Plus}
                   icon={ShieldCheck}
                 />
               </section>
@@ -628,7 +628,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       </Link>
                       <StatusBadge tone="warning">{data.metrics.studentsAt10Plus} at 10+</StatusBadge>
                       <StatusBadge tone="info">{activeEscalationBands} active bands</StatusBadge>
-                      <StatusBadge tone="danger">{data.metrics.studentsAt35Plus} at 35+</StatusBadge>
+                      <StatusBadge tone="danger">{data.metrics.studentsAt40Plus} at 40+</StatusBadge>
                     </div>
                   </div>
 
@@ -732,10 +732,10 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                         </SoftPanel>
                         <SoftPanel className="space-y-2">
                           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">
-                            Students at 35+
+                            Students at 40+
                           </p>
-                          <p className="font-display text-3xl text-[var(--color-ink)]">{data.metrics.studentsAt35Plus}</p>
-                          <p className="text-sm text-[var(--color-muted)]">Critical cases that need the fastest admin attention.</p>
+                          <p className="font-display text-3xl text-[var(--color-ink)]">{data.metrics.studentsAt40Plus}</p>
+                          <p className="text-sm text-[var(--color-muted)]">Students in the highest handbook band needing the fastest admin attention.</p>
                         </SoftPanel>
                       </div>
 
@@ -813,7 +813,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       <>
                         <p className="font-display text-3xl text-[var(--color-ink)]">Grade {topPressureGrade.grade}</p>
                         <p className="text-sm text-[var(--color-muted)]">
-                          {topPressureGrade.escalatedCount} students at 10+ and {topPressureGrade.criticalCount} at 35+.
+                          {topPressureGrade.escalatedCount} students at 10+ and {topPressureGrade.criticalCount} at 40+.
                         </p>
                       </>
                     ) : (

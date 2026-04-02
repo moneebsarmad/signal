@@ -1,4 +1,4 @@
-import type { IngestionSourceType } from "@syc/domain";
+import type { IngestionSourceType, Student } from "@syc/domain";
 import type { StorageRepositories } from "@syc/storage";
 
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
@@ -27,7 +27,7 @@ export interface DashboardSnapshot {
     incidentsTracked: number;
     totalPoints: number;
     studentsAt10Plus: number;
-    studentsAt35Plus: number;
+    studentsAt40Plus: number;
     openInterventions: number;
     queuedNotifications: number;
     failedNotifications: number;
@@ -109,6 +109,31 @@ function normalizeSourceType(value: string | undefined): DashboardSourceType {
     return value;
   }
   return DEFAULT_SOURCE_TYPE;
+}
+
+function resolveCanonicalStudentId(
+  event: DisciplineEventRecord,
+  input: {
+    studentsById: Map<string, Student>;
+    studentIdByExternalId: Map<string, string>;
+  }
+): string {
+  if (event.localStudentId && input.studentsById.has(event.localStudentId)) {
+    return event.localStudentId;
+  }
+
+  if (event.studentExternalId) {
+    const resolvedStudentId = input.studentIdByExternalId.get(event.studentExternalId);
+    if (resolvedStudentId) {
+      return resolvedStudentId;
+    }
+  }
+
+  if (event.localStudentId) {
+    return event.localStudentId;
+  }
+
+  return event.studentId;
 }
 
 function isMissingGuardianContactsTableError(error: unknown): boolean {
@@ -218,6 +243,11 @@ export async function buildDashboardSnapshot(
   const sourceTypeFilter = normalizedFilters.sourceType === "all" ? null : normalizedFilters.sourceType;
 
   const studentsById = new Map(students.map((student) => [student.id, student] as const));
+  const studentIdByExternalId = new Map(
+    students
+      .filter((student) => Boolean(student.externalId))
+      .map((student) => [student.externalId as string, student.id] as const)
+  );
   const filteredEvents = disciplineEvents.filter((event) => {
     const grade = event.grade ?? studentsById.get(event.localStudentId ?? "")?.grade ?? "unknown";
     if (normalizedFilters.grade && grade !== normalizedFilters.grade) {
@@ -260,14 +290,15 @@ export async function buildDashboardSnapshot(
   const incidentSourceCounts: Record<string, number> = {};
 
   for (const event of filteredEvents) {
-    const fallbackStudent = event.localStudentId ? studentsById.get(event.localStudentId) : undefined;
-    const fullName = event.studentName ?? fallbackStudent?.fullName ?? event.studentId;
-    const grade = event.grade ?? fallbackStudent?.grade ?? "unknown";
+    const canonicalStudentId = resolveCanonicalStudentId(event, { studentsById, studentIdByExternalId });
+    const fallbackStudent = studentsById.get(canonicalStudentId) ?? (event.localStudentId ? studentsById.get(event.localStudentId) : undefined);
+    const fullName = fallbackStudent?.fullName ?? event.studentName ?? canonicalStudentId;
+    const grade = fallbackStudent?.grade ?? event.grade ?? "unknown";
     const aggregate =
-      studentAggregates.get(event.studentId) ??
+      studentAggregates.get(canonicalStudentId) ??
       {
-        studentId: event.studentId,
-        localStudentId: event.localStudentId,
+        studentId: canonicalStudentId,
+        localStudentId: fallbackStudent?.id ?? event.localStudentId,
         fullName,
         grade,
         incidentCount: 0,
@@ -280,7 +311,10 @@ export async function buildDashboardSnapshot(
     if (timestamp && (!aggregate.latestIncidentAt || Date.parse(timestamp) > Date.parse(aggregate.latestIncidentAt))) {
       aggregate.latestIncidentAt = timestamp;
     }
-    studentAggregates.set(event.studentId, aggregate);
+    aggregate.localStudentId = fallbackStudent?.id ?? aggregate.localStudentId;
+    aggregate.fullName = fallbackStudent?.fullName ?? aggregate.fullName;
+    aggregate.grade = fallbackStudent?.grade ?? aggregate.grade;
+    studentAggregates.set(canonicalStudentId, aggregate);
 
     const gradeRow =
       gradePressureMap.get(grade) ??
@@ -435,7 +469,7 @@ export async function buildDashboardSnapshot(
     if (aggregate.totalPoints >= 10) {
       row.escalatedCount += 1;
     }
-    if (aggregate.totalPoints >= 35) {
+    if (aggregate.totalPoints >= 40) {
       row.criticalCount += 1;
     }
     gradePressureMap.set(aggregate.grade, row);
@@ -490,7 +524,7 @@ export async function buildDashboardSnapshot(
       incidentsTracked: filteredEvents.length,
       totalPoints: filteredEvents.reduce((sum, event) => sum + event.points, 0),
       studentsAt10Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 10).length,
-      studentsAt35Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 35).length,
+      studentsAt40Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 40).length,
       openInterventions: Object.entries(interventionCounts)
         .filter(([status]) => ["open", "in_progress", "overdue"].includes(status))
         .reduce((sum, [, count]) => sum + count, 0),

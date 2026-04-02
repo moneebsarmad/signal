@@ -224,6 +224,88 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   assert.deepEqual(pdfExceptionSnapshot.parseRunSourceCounts, { manual_pdf: 1 });
 });
 
+test("buildDashboardSnapshot merges split student identities before assigning ladder bands", async () => {
+  const storage = createInMemoryStorage({
+    parseRuns: [],
+    rawIncidents: [],
+    reviewTasks: [],
+    students: seedStudents(),
+    approvedIncidents: [
+      {
+        id: "inc_split_sycamore",
+        studentId: "sycamore:student-1",
+        sourceType: "sycamore_api",
+        sourceRecordId: "disc-split-1",
+        externalStudentId: "student-1",
+        gradeAtEvent: "8",
+        eventType: "discipline",
+        occurredAt: "2026-03-01T10:00:00.000Z",
+        points: 35,
+        reason: "Repeated disruption",
+        comment: "",
+        teacherName: "Ms Smith",
+        sourceJobId: "run_sycamore_split",
+        fingerprint: "fp_split_sycamore",
+        reviewedBy: "reviewer@school.org",
+        reviewedAt: "2026-03-01T11:00:00.000Z"
+      },
+      {
+        id: "inc_split_manual",
+        studentId: "stu_1",
+        sourceType: "manual_pdf",
+        sourceRecordId: "pdf-split-1",
+        externalStudentId: "student-1",
+        gradeAtEvent: "8",
+        eventType: "discipline",
+        occurredAt: "2026-03-05T10:00:00.000Z",
+        points: 10,
+        reason: "Hallway conduct",
+        comment: "",
+        teacherName: "Ms Smith",
+        sourceJobId: "run_manual_split",
+        fingerprint: "fp_split_manual",
+        reviewedBy: "reviewer@school.org",
+        reviewedAt: "2026-03-05T11:00:00.000Z"
+      },
+      {
+        id: "inc_threshold_35",
+        studentId: "stu_2",
+        sourceType: "manual_pdf",
+        sourceRecordId: "pdf-threshold-35",
+        externalStudentId: "student-2",
+        gradeAtEvent: "8",
+        eventType: "discipline",
+        occurredAt: "2026-03-07T10:00:00.000Z",
+        points: 35,
+        reason: "Class disruption",
+        comment: "",
+        teacherName: "Mr Adams",
+        sourceJobId: "run_manual_35",
+        fingerprint: "fp_threshold_35",
+        reviewedBy: "reviewer@school.org",
+        reviewedAt: "2026-03-07T11:00:00.000Z"
+      }
+    ],
+    policies: [seedPolicy()],
+    interventions: [],
+    notifications: []
+  });
+
+  const snapshot = await buildDashboardSnapshot(storage, {
+    grade: "8"
+  });
+
+  assert.equal(snapshot.metrics.studentsTracked, 2);
+  assert.equal(snapshot.metrics.studentsAt10Plus, 2);
+  assert.equal(snapshot.metrics.studentsAt40Plus, 1);
+  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_10_19")?.count, 0);
+  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_20_39")?.count, 1);
+  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_40_plus")?.count, 1);
+  assert.equal(snapshot.actionQueue[0]?.studentId, "stu_1");
+  assert.equal(snapshot.actionQueue[0]?.currentBandId, "points_40_plus");
+  assert.equal(snapshot.gradePressure[0]?.criticalCount, 1);
+});
+
 test("buildDashboardSnapshot tolerates a missing guardian contacts table", async () => {
   const storage = createInMemoryStorage({
     parseRuns: seedParseRuns(),
