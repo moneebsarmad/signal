@@ -1,8 +1,7 @@
 export type DemeritEscalationBandId =
   | "below_10"
   | "points_10_19"
-  | "points_20_29"
-  | "points_35_39"
+  | "points_20_39"
   | "points_40_plus";
 
 export interface DemeritEscalationBand {
@@ -22,8 +21,8 @@ export interface DemeritEscalationBand {
 export const demeritEscalationBands: DemeritEscalationBand[] = [
   {
     id: "below_10",
-    label: "Below 10 points",
-    shortLabel: "Below 10",
+    label: "0 to 9 points",
+    shortLabel: "0-9",
     minPoints: 0,
     maxPoints: 9,
     tone: "neutral",
@@ -49,11 +48,11 @@ export const demeritEscalationBands: DemeritEscalationBand[] = [
       "Student may be at risk for programs tied to demerit points, including Dual Credit, club roles, participation, and athletics scholarship eligibility."
   },
   {
-    id: "points_20_29",
-    label: "20 to 34 points",
-    shortLabel: "20-34",
+    id: "points_20_39",
+    label: "20 to 39 points",
+    shortLabel: "20-39",
     minPoints: 20,
-    maxPoints: 34,
+    maxPoints: 39,
     tone: "warning",
     priority: 2,
     parentCommunication: "Parents should meet with BHA administration.",
@@ -64,23 +63,8 @@ export const demeritEscalationBands: DemeritEscalationBand[] = [
       "Student should be advised to attend counseling with Behavior and/or Academic Counselors."
   },
   {
-    id: "points_35_39",
-    label: "35 to 39 points",
-    shortLabel: "35-39",
-    minPoints: 35,
-    maxPoints: 39,
-    tone: "danger",
-    priority: 3,
-    parentCommunication: "Parents should meet with administration for a severity review.",
-    adminAction: "Obtain signed acknowledgement, document the case in Sycamore, and prepare the 5-day OSS response.",
-    adminMessage:
-      "Explain that reaching 40+ points may require un-enrollment, secure parent sign-off, and document the full action trail.",
-    policyImpact:
-      "Students are placed at risk for enrollment and probation during re-enrollment, and the handbook calls for automatic 5-day out-of-school suspension."
-  },
-  {
     id: "points_40_plus",
-    label: "40 or more points",
+    label: "40+ points",
     shortLabel: "40+",
     minPoints: 40,
     maxPoints: null,

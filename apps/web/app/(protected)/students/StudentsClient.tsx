@@ -118,8 +118,7 @@ type StudentBandFilter =
   | "communication_ladder"
   | "below_10"
   | "points_10_19"
-  | "points_20_29"
-  | "points_35_39"
+  | "points_20_39"
   | "points_40_plus";
 type StudentFilterState = {
   search: string;
@@ -415,8 +414,7 @@ export function StudentsClient({
       initialFilters?.bandId === "communication_ladder" ||
       initialFilters?.bandId === "below_10" ||
       initialFilters?.bandId === "points_10_19" ||
-      initialFilters?.bandId === "points_20_29" ||
-      initialFilters?.bandId === "points_35_39" ||
+      initialFilters?.bandId === "points_20_39" ||
       initialFilters?.bandId === "points_40_plus"
         ? initialFilters.bandId
         : DEFAULT_BAND_FILTER

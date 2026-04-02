@@ -27,7 +27,7 @@ export interface DashboardSnapshot {
     incidentsTracked: number;
     totalPoints: number;
     studentsAt10Plus: number;
-    studentsAt35Plus: number;
+    studentsAt40Plus: number;
     openInterventions: number;
     queuedNotifications: number;
     failedNotifications: number;
@@ -490,7 +490,7 @@ export async function buildDashboardSnapshot(
       incidentsTracked: filteredEvents.length,
       totalPoints: filteredEvents.reduce((sum, event) => sum + event.points, 0),
       studentsAt10Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 10).length,
-      studentsAt35Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 35).length,
+      studentsAt40Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 40).length,
       openInterventions: Object.entries(interventionCounts)
         .filter(([status]) => ["open", "in_progress", "overdue"].includes(status))
         .reduce((sum, [, count]) => sum + count, 0),

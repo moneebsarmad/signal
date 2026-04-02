@@ -24,10 +24,11 @@ export default function StudentsPage({
           bandId === "communication_ladder" ||
           bandId === "below_10" ||
           bandId === "points_10_19" ||
-          bandId === "points_20_29" ||
-          bandId === "points_35_39" ||
+          bandId === "points_20_39" ||
           bandId === "points_40_plus"
             ? bandId
+            : bandId === "points_20_29" || bandId === "points_35_39"
+              ? "points_20_39"
             : "all"
       }}
       initialMode={
