@@ -246,6 +246,22 @@ const DEFAULT_SOURCE_TYPE: IngestionSourceType = "sycamore_api";
 const DAY_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_WINDOW_DAYS = 30;
 
+function normalizeThresholdBandFilter(value: string | undefined): DemeritEscalationBandId | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value === "points_20_29" || value === "points_35_39") {
+    return "points_20_39";
+  }
+
+  if (value === "below_10" || value === "points_10_19" || value === "points_20_39" || value === "points_40_plus") {
+    return value;
+  }
+
+  return undefined;
+}
+
 const BEHAVIOR_THEME_DEFINITIONS: ThemeDefinition[] = [
   {
     label: "Disrespect / defiance",
@@ -707,7 +723,7 @@ function buildThresholdPressureRows(
       .filter((row) => row.bandId !== "below_10")
       .reduce((sum, row) => sum + row.studentCount, 0),
     criticalStudents: rows
-      .filter((row) => row.bandId === "points_35_39" || row.bandId === "points_40_plus")
+      .filter((row) => row.bandId === "points_40_plus")
       .reduce((sum, row) => sum + row.studentCount, 0),
     crossedIntoHigherBand: [...crossingCountsByBand.values()].reduce((sum, value) => sum + value, 0),
     rows
@@ -753,7 +769,7 @@ function buildGradePressureRows(
     if (totalPoints >= 10) {
       row.escalatedStudents += 1;
     }
-    if (totalPoints >= 35) {
+    if (totalPoints >= 40) {
       row.criticalStudents += 1;
     }
     liveStudentsByGrade.set(grade, row);
@@ -1232,9 +1248,9 @@ export function readAnalyticsFilters(searchParams: URLSearchParams): AnalyticsFi
     student: normalizeFilterValue(searchParams.get("student") || undefined) || undefined,
     violation: normalizeFilterValue(searchParams.get("violation") || undefined) || undefined,
     author: normalizeFilterValue(searchParams.get("author") || undefined) || undefined,
-    thresholdBand: (normalizeFilterValue(searchParams.get("thresholdBand") || undefined) || undefined) as
-      | DemeritEscalationBandId
-      | undefined
+    thresholdBand: normalizeThresholdBandFilter(
+      normalizeFilterValue(searchParams.get("thresholdBand") || undefined) || undefined
+    )
   };
 }
 
@@ -1255,7 +1271,7 @@ export async function buildAnalyticsSnapshot(
     student: normalizeFilterValue(filters.student),
     violation: normalizeFilterValue(filters.violation),
     author: normalizeFilterValue(filters.author),
-    thresholdBand: normalizeFilterValue(filters.thresholdBand)
+    thresholdBand: normalizeThresholdBandFilter(normalizeFilterValue(filters.thresholdBand) || undefined) ?? ""
   };
 
   const studentsById = new Map(

@@ -501,7 +501,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge tone="warning">{data.thresholdPressure.escalatedStudents} live 10+</StatusBadge>
-                  <StatusBadge tone="danger">{data.thresholdPressure.criticalStudents} live 35+</StatusBadge>
+                  <StatusBadge tone="danger">{data.thresholdPressure.criticalStudents} live 40+</StatusBadge>
                   <StatusBadge tone="info">{data.thresholdPressure.crossedIntoHigherBand} entered higher band</StatusBadge>
                 </div>
               </div>
@@ -559,7 +559,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                           <th className={tableHeadCellClassName}>Incidents /100</th>
                           <th className={tableHeadCellClassName}>Points /100</th>
                           <th className={tableHeadCellClassName}>Live 10+</th>
-                          <th className={tableHeadCellClassName}>Live 35+</th>
+                          <th className={tableHeadCellClassName}>Live 40+</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--color-line)]">
