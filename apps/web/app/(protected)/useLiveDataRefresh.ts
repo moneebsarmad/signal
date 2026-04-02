@@ -8,7 +8,7 @@ const SOURCE_STATUS_POLL_MS = 5000;
 const AUTO_REFRESH_COOLDOWN_MS = 60_000;
 const AUTO_REFRESH_STORAGE_KEY = "signal:sycamore-live-refresh-at";
 const REALTIME_EVENT_DEBOUNCE_MS = 1500;
-const REALTIME_SAFETY_POLL_MS = 10_000;
+const REALTIME_SAFETY_POLL_MS = 5_000;
 
 type SycamoreSyncStatus = "running" | "success" | "partial" | "failed" | "canceled";
 type SupabaseRealtimeStatus = "disabled" | "connecting" | "live" | "fallback";

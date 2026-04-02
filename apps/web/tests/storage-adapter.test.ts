@@ -43,6 +43,7 @@ test("createStorageAdapter uses local file-backed adapter in development without
   await withEnv(
     {
       NODE_ENV: "development",
+      ALLOW_LOCAL_STORAGE_FALLBACK: "true",
       LOCAL_STORAGE_FILE: storageFile,
       GOOGLE_SHEETS_SPREADSHEET_ID: undefined,
       GOOGLE_SERVICE_ACCOUNT_EMAIL: undefined,
@@ -73,6 +74,7 @@ test("createStorageAdapter prefers Supabase when Supabase env is configured", ()
       NODE_ENV: "development",
       NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
       SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+      ALLOW_LOCAL_STORAGE_FALLBACK: undefined,
       GOOGLE_SHEETS_SPREADSHEET_ID: undefined,
       GOOGLE_SERVICE_ACCOUNT_EMAIL: undefined,
       GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: undefined
@@ -86,11 +88,12 @@ test("createStorageAdapter prefers Supabase when Supabase env is configured", ()
   );
 });
 
-test("createStorageAdapter rejects production fallback when remote storage env is missing", () => {
+test("createStorageAdapter rejects fallback when Supabase env is missing and fallback is not allowed", () => {
   const storageFile = `/tmp/syc-local-storage-${Date.now()}-prod.json`;
   withEnv(
     {
-      NODE_ENV: "production",
+      NODE_ENV: "development",
+      ALLOW_LOCAL_STORAGE_FALLBACK: undefined,
       LOCAL_STORAGE_FILE: storageFile,
       NEXT_PUBLIC_SUPABASE_URL: undefined,
       SUPABASE_SERVICE_ROLE_KEY: undefined,
@@ -101,7 +104,7 @@ test("createStorageAdapter rejects production fallback when remote storage env i
     () => {
       assert.throws(
         () => createStorageAdapter(),
-        /Supabase or Google Sheets credentials are required in production/
+        /Supabase credentials are required/
       );
     }
   );

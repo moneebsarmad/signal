@@ -1,11 +1,9 @@
-import { SheetsAdapter, SupabaseAdapter } from "@syc/storage";
+import { SupabaseAdapter } from "@syc/storage";
 
-import { createGoogleSheetsClient } from "@/lib/google-sheets-client";
 import { LocalStorageAdapter, type AppStorageAdapter } from "@/lib/local-storage-adapter";
 import { createSupabaseServerClient } from "@/lib/supabase-server-client";
 
 let localAdapterSingleton: LocalStorageAdapter | null = null;
-let sheetsAdapterSingleton: SheetsAdapter | null = null;
 let supabaseAdapterSingleton: SupabaseAdapter | null = null;
 
 function hasSupabaseEnv(): boolean {
@@ -15,12 +13,8 @@ function hasSupabaseEnv(): boolean {
   );
 }
 
-function hasSheetsEnv(): boolean {
-  return Boolean(
-    process.env.GOOGLE_SHEETS_SPREADSHEET_ID &&
-      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL &&
-      process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY
-  );
+function allowLocalStorageFallback(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.ALLOW_LOCAL_STORAGE_FALLBACK === "true";
 }
 
 export function createStorageAdapter(): AppStorageAdapter {
@@ -31,16 +25,9 @@ export function createStorageAdapter(): AppStorageAdapter {
     return supabaseAdapterSingleton;
   }
 
-  if (hasSheetsEnv()) {
-    if (!sheetsAdapterSingleton) {
-      sheetsAdapterSingleton = new SheetsAdapter(createGoogleSheetsClient());
-    }
-    return sheetsAdapterSingleton;
-  }
-
-  if (process.env.NODE_ENV === "production") {
+  if (!allowLocalStorageFallback()) {
     throw new Error(
-      "Supabase or Google Sheets credentials are required in production. Local file storage fallback is development-only."
+      "Supabase credentials are required. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Local file storage fallback is only available when ALLOW_LOCAL_STORAGE_FALLBACK=true or during tests."
     );
   }
 
