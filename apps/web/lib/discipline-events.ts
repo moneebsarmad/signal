@@ -3,6 +3,8 @@ import type { StorageRepositories } from "@syc/storage";
 
 import { createSupabaseServerClient } from "@/lib/supabase-server-client";
 
+const SUPABASE_DISCIPLINE_EVENTS_PAGE_SIZE = 1000;
+
 export interface DisciplineEventRecord {
   eventKey: string;
   sourceType: IngestionSourceType;
@@ -34,6 +36,19 @@ export interface DisciplineEventFilters {
   grade?: string;
   localStudentId?: string;
   studentExternalId?: string;
+}
+
+interface DisciplineEventsSupabaseQueryResult {
+  data: Record<string, unknown>[] | null;
+  error: {
+    message: string;
+  } | null;
+}
+
+interface DisciplineEventsSupabaseClient {
+  from(table: "discipline_events"): {
+    select(columns: string): any;
+  };
 }
 
 function hasSupabaseServiceRoleEnv(): boolean {
@@ -182,10 +197,10 @@ function parseDisciplineEventRow(row: Record<string, unknown>): DisciplineEventR
   };
 }
 
-async function listDisciplineEventsFromSupabaseWithFilters(
+function buildDisciplineEventsSupabaseQuery(
+  client: DisciplineEventsSupabaseClient,
   filters?: DisciplineEventFilters
-): Promise<DisciplineEventRecord[]> {
-  const client = createSupabaseServerClient();
+) {
   let query = client
     .from("discipline_events")
     .select("*")
@@ -210,15 +225,37 @@ async function listDisciplineEventsFromSupabaseWithFilters(
     query = query.eq("student_external_id", studentExternalId);
   }
 
-  const { data, error } = await query;
+  return query;
+}
 
-  if (error) {
-    throw new Error(
-      `Supabase select failed for table "discipline_events": ${error.message}. Apply the SQL in supabase/schema.sql first.`
-    );
+async function listDisciplineEventsFromSupabaseWithFilters(
+  client: DisciplineEventsSupabaseClient,
+  filters?: DisciplineEventFilters
+): Promise<DisciplineEventRecord[]> {
+  const rows: Record<string, unknown>[] = [];
+
+  for (let from = 0; ; from += SUPABASE_DISCIPLINE_EVENTS_PAGE_SIZE) {
+    const query = buildDisciplineEventsSupabaseQuery(client, filters);
+    const { data, error } = (await query.range(
+      from,
+      from + SUPABASE_DISCIPLINE_EVENTS_PAGE_SIZE - 1
+    )) as DisciplineEventsSupabaseQueryResult;
+
+    if (error) {
+      throw new Error(
+        `Supabase select failed for table "discipline_events": ${error.message}. Apply the SQL in supabase/schema.sql first.`
+      );
+    }
+
+    const page = (data as Record<string, unknown>[] | null) ?? [];
+    rows.push(...page);
+
+    if (page.length < SUPABASE_DISCIPLINE_EVENTS_PAGE_SIZE) {
+      break;
+    }
   }
 
-  return ((data as Record<string, unknown>[] | null) ?? []).map(parseDisciplineEventRow);
+  return rows.map(parseDisciplineEventRow);
 }
 
 async function listDisciplineEventsFromStorage(
@@ -331,10 +368,13 @@ export async function listDisciplineEvents(
     approvedIncidents?: ApprovedIncident[];
     students?: Student[];
   },
-  filters?: DisciplineEventFilters
+  filters?: DisciplineEventFilters,
+  options?: {
+    supabaseClient?: DisciplineEventsSupabaseClient;
+  }
 ): Promise<DisciplineEventRecord[]> {
   if (hasSupabaseServiceRoleEnv()) {
-    return listDisciplineEventsFromSupabaseWithFilters(filters);
+    return listDisciplineEventsFromSupabaseWithFilters(options?.supabaseClient ?? createSupabaseServerClient(), filters);
   }
 
   return listDisciplineEventsFromStorage(storage, input, filters);

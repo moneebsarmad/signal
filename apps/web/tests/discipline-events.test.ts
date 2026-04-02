@@ -138,3 +138,98 @@ test("listDisciplineEvents prefers Sycamore rows and keeps unmatched PDF rows as
     process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRoleKey;
   }
 });
+
+test("listDisciplineEvents paginates through all Supabase discipline event rows", async () => {
+  const originalSupabaseUrl = process.env.SUPABASE_URL;
+  const originalPublicSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const originalServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+
+  const rows = Array.from({ length: 1001 }, (_, index) => {
+    const rowIndex = index + 1;
+    const day = String(((rowIndex - 1) % 28) + 1).padStart(2, "0");
+    return {
+      event_key: `event-${rowIndex}`,
+      source_type: "sycamore_api",
+      source_priority: 1,
+      source_record_id: `source-${rowIndex}`,
+      student_id: `student-${rowIndex}`,
+      local_student_id: `student-${rowIndex}`,
+      student_external_id: `ext-${rowIndex}`,
+      student_name: `Student ${rowIndex}`,
+      grade: "8",
+      incident_date: `2026-03-${day}`,
+      occurred_at: `2026-03-${day}T10:00:00.000Z`,
+      points: 1,
+      level: 1,
+      violation: "Disrespect",
+      violation_raw: "Disrespect",
+      reason: "Disrespect",
+      description: "Incident",
+      resolution: "Warning",
+      author_name: "Teacher",
+      source_table: "sycamore_discipline_logs",
+      source_synced_at: `2026-03-${day}T11:00:00.000Z`,
+      is_fallback: false,
+      has_source_conflict: false
+    };
+  });
+
+  const requestedRanges: Array<[number, number]> = [];
+
+  const fakeClient = {
+    from(table: "discipline_events") {
+      assert.equal(table, "discipline_events");
+      return {
+        select() {
+          return this;
+        },
+        order() {
+          return this;
+        },
+        eq() {
+          return this;
+        },
+        or() {
+          return this;
+        },
+        async range(from: number, to: number) {
+          requestedRanges.push([from, to]);
+          return {
+            data: rows.slice(from, to + 1),
+            error: null
+          };
+        }
+      };
+    }
+  };
+
+  try {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: [],
+      approvedIncidents: []
+    });
+
+    const events = await listDisciplineEvents(storage, undefined, undefined, {
+      supabaseClient: fakeClient
+    });
+
+    assert.equal(events.length, 1001);
+    assert.deepEqual(requestedRanges, [
+      [0, 999],
+      [1000, 1999]
+    ]);
+    assert.equal(events[0]?.sourceRecordId, "source-1");
+    assert.equal(events[1000]?.sourceRecordId, "source-1001");
+  } finally {
+    process.env.SUPABASE_URL = originalSupabaseUrl;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = originalPublicSupabaseUrl;
+    process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRoleKey;
+  }
+});
