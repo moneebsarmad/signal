@@ -109,12 +109,15 @@ export function normalizeStudentSourceType(value: string | undefined): StudentSo
 }
 
 export function normalizeStudentBandFilter(value: string | undefined): StudentBandFilter {
+  if (value === "points_20_29" || value === "points_35_39") {
+    return "points_20_39";
+  }
+
   if (
     value === "communication_ladder" ||
     value === "below_10" ||
     value === "points_10_19" ||
-    value === "points_20_29" ||
-    value === "points_35_39" ||
+    value === "points_20_39" ||
     value === "points_40_plus"
   ) {
     return value;

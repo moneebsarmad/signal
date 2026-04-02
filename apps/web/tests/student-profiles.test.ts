@@ -254,9 +254,9 @@ test("buildStudentDirectoryRows filters the communication ladder and exact handb
     assert.equal(tenToNineteenRows.length, 1);
     assert.equal(tenToNineteenRows[0]?.id, "stu_1");
 
-    const thirtyFivePlusRows = await buildStudentDirectoryRows(storage, { bandId: "points_35_39" });
-    assert.equal(thirtyFivePlusRows.length, 1);
-    assert.equal(thirtyFivePlusRows[0]?.id, "stu_2");
+    const twentyToThirtyNineRows = await buildStudentDirectoryRows(storage, { bandId: "points_20_39" });
+    assert.equal(twentyToThirtyNineRows.length, 1);
+    assert.equal(twentyToThirtyNineRows[0]?.id, "stu_2");
   });
 });
 
