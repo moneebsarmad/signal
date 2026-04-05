@@ -702,8 +702,8 @@ function buildThresholdPressureRows(
   currentTotalsByStudent: Map<string, number>,
   crossingCountsByBand: Map<string, number>
 ): AnalyticsSnapshot["thresholdPressure"] {
-  const totalStudents = currentTotalsByStudent.size;
-  const rows = demeritEscalationBands.map((band) => {
+  const liveBands = demeritEscalationBands.filter((band) => band.id !== "below_10");
+  const rows = liveBands.map((band) => {
     const studentCount = [...currentTotalsByStudent.values()].filter(
       (points) => getDemeritEscalationBand(points).id === band.id
     ).length;
@@ -713,20 +713,23 @@ function buildThresholdPressureRows(
       shortLabel: band.shortLabel,
       tone: band.tone,
       studentCount,
-      share: share(studentCount, totalStudents),
+      share: 0,
       enteredCount: crossingCountsByBand.get(band.id) ?? 0
     };
   });
+  const totalStudents = rows.reduce((sum, row) => sum + row.studentCount, 0);
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    share: share(row.studentCount, totalStudents)
+  }));
 
   return {
-    escalatedStudents: rows
-      .filter((row) => row.bandId !== "below_10")
-      .reduce((sum, row) => sum + row.studentCount, 0),
-    criticalStudents: rows
+    escalatedStudents: totalStudents,
+    criticalStudents: normalizedRows
       .filter((row) => row.bandId === "points_40_plus")
       .reduce((sum, row) => sum + row.studentCount, 0),
     crossedIntoHigherBand: [...crossingCountsByBand.values()].reduce((sum, value) => sum + value, 0),
-    rows
+    rows: normalizedRows
   };
 }
 

@@ -386,6 +386,11 @@ test("buildAnalyticsSnapshot keeps live escalation bands even when the analytics
   assert.equal(snapshot.summary[1]?.value, 1);
   assert.equal(snapshot.summary[2]?.value, 4);
   assert.equal(snapshot.thresholdPressure.escalatedStudents, 1);
+  assert.deepEqual(
+    snapshot.thresholdPressure.rows.map((row) => row.bandId),
+    ["points_10_19", "points_20_39", "points_40_plus"]
+  );
+  assert.equal(snapshot.thresholdPressure.rows[0]?.share, 100);
   assert.equal(snapshot.studentRows[0]?.studentId, "stu_1");
   assert.equal(snapshot.studentRows[0]?.totalPoints, 4);
   assert.equal(snapshot.studentRows[0]?.currentTotalPoints, 16);
@@ -417,6 +422,11 @@ test("buildAnalyticsSnapshot computes pressure, recurrence, workflow, and narrat
   assert.equal(snapshot.summary[2]?.value, 22);
   assert.equal(snapshot.summary[3]?.value, 1);
   assert.equal(snapshot.thresholdPressure.crossedIntoHigherBand, 1);
+  assert.equal(snapshot.thresholdPressure.rows.length, 3);
+  assert.equal(
+    snapshot.thresholdPressure.rows.reduce((sum, row) => sum + row.share, 0),
+    100
+  );
 
   assert.equal(snapshot.repeatIncident.repeat14Rate, 25);
   assert.equal(snapshot.repeatIncident.repeat30Rate, 75);
