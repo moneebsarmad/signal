@@ -435,8 +435,8 @@ test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", a
         sequenceIndex: number;
         totalJobs: number;
         triggeredBy: "manual" | "cron";
-        requestPayload: { startDate?: string; endDate?: string; incremental?: boolean };
-        syncMode: "initial_backfill" | "incremental" | "manual_range";
+        requestPayload: { startDate?: string; endDate?: string; dates?: string[]; incremental?: boolean };
+        syncMode: "initial_backfill" | "incremental" | "manual_range" | "specific_dates";
         windowStartDate: string;
         windowEndDate: string;
       }>
@@ -499,6 +499,79 @@ test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", a
   );
 });
 
+test("enqueueSycamoreSyncBatch creates one queued job per explicit specific date", async () => {
+  const createdJobs: SycamoreSyncJobRecord[] = [];
+  const jobStore = createJobStoreStub({
+    async createSyncJobs(
+      inputs: Array<{
+        batchId: string;
+        sequenceIndex: number;
+        totalJobs: number;
+        triggeredBy: "manual" | "cron";
+        requestPayload: { startDate?: string; endDate?: string; dates?: string[]; incremental?: boolean };
+        syncMode: "initial_backfill" | "incremental" | "manual_range" | "specific_dates";
+        windowStartDate: string;
+        windowEndDate: string;
+      }>
+    ) {
+      const rows = inputs.map((input) =>
+        makeJob({
+          id: `job_specific_${input.sequenceIndex + 1}`,
+          batchId: input.batchId,
+          sequenceIndex: input.sequenceIndex,
+          totalJobs: input.totalJobs,
+          triggeredBy: input.triggeredBy,
+          requestPayload: input.requestPayload,
+          syncMode: input.syncMode,
+          window: {
+            startDate: input.windowStartDate,
+            endDate: input.windowEndDate
+          }
+        })
+      );
+      createdJobs.push(...rows);
+      return rows;
+    },
+    async listSyncJobsByBatch(batchId: string) {
+      return createdJobs.filter((job) => job.batchId === batchId);
+    }
+  });
+
+  const result = await enqueueSycamoreSyncBatch({
+    request: {
+      dates: ["2026-03-12", "2026-03-10", "2026-03-12", "2026-03-09"],
+      grade: "8"
+    },
+    triggeredBy: "manual",
+    syncStore: createMinimalSyncStore(),
+    jobStore,
+    auditSink: {
+      async append() {}
+    }
+  });
+
+  assert.equal(result.alreadyQueued, false);
+  assert.equal(result.batch.syncMode, "specific_dates");
+  assert.deepEqual(result.batch.selectedDates, ["2026-03-09", "2026-03-10", "2026-03-12"]);
+  assert.equal(result.batch.totalChunks, 3);
+  assert.deepEqual(
+    result.jobs.map((job) => job.window),
+    [
+      { startDate: "2026-03-09", endDate: "2026-03-09" },
+      { startDate: "2026-03-10", endDate: "2026-03-10" },
+      { startDate: "2026-03-12", endDate: "2026-03-12" }
+    ]
+  );
+  assert.deepEqual(
+    result.jobs.map((job) => job.requestPayload),
+    [
+      { startDate: "2026-03-09", endDate: "2026-03-09", grade: "8" },
+      { startDate: "2026-03-10", endDate: "2026-03-10", grade: "8" },
+      { startDate: "2026-03-12", endDate: "2026-03-12", grade: "8" }
+    ]
+  );
+});
+
 test("enqueueSycamoreSyncBatch also chunks wide incremental gaps into 3-day windows", async () => {
   const createdJobs: SycamoreSyncJobRecord[] = [];
   const jobStore = createJobStoreStub({
@@ -508,8 +581,8 @@ test("enqueueSycamoreSyncBatch also chunks wide incremental gaps into 3-day wind
         sequenceIndex: number;
         totalJobs: number;
         triggeredBy: "manual" | "cron";
-        requestPayload: { startDate?: string; endDate?: string; incremental?: boolean };
-        syncMode: "initial_backfill" | "incremental" | "manual_range";
+        requestPayload: { startDate?: string; endDate?: string; dates?: string[]; incremental?: boolean };
+        syncMode: "initial_backfill" | "incremental" | "manual_range" | "specific_dates";
         windowStartDate: string;
         windowEndDate: string;
       }>
@@ -655,8 +728,8 @@ test("enqueueSycamoreSyncBatch appends an audit event for the queued batch", asy
         sequenceIndex: number;
         totalJobs: number;
         triggeredBy: "manual" | "cron";
-        requestPayload: { startDate?: string; endDate?: string; incremental?: boolean };
-        syncMode: "initial_backfill" | "incremental" | "manual_range";
+        requestPayload: { startDate?: string; endDate?: string; dates?: string[]; incremental?: boolean };
+        syncMode: "initial_backfill" | "incremental" | "manual_range" | "specific_dates";
         windowStartDate: string;
         windowEndDate: string;
       }>

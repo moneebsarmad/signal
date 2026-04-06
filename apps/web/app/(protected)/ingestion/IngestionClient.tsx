@@ -27,12 +27,14 @@ interface JobsResponse {
 }
 
 type SycamoreSyncBatchStatus = "queued" | "running" | "canceling" | "canceled" | "success" | "partial" | "failed";
+type IntakeSyncMode = "default" | "range" | "specific_dates";
 
 interface SycamoreSyncBatch {
   batchId: string;
   syncLogId: string | null;
   status: SycamoreSyncBatchStatus;
-  syncMode: "initial_backfill" | "manual_range" | "incremental";
+  syncMode: "initial_backfill" | "manual_range" | "incremental" | "specific_dates";
+  selectedDates: string[] | null;
   window: {
     startDate: string;
     endDate: string;
@@ -112,7 +114,7 @@ interface SycamoreSyncWorkerResponse {
 
 interface SycamoreSyncProgressSnapshot {
   syncLogId: string;
-  syncMode: "initial_backfill" | "manual_range" | "incremental";
+  syncMode: "initial_backfill" | "manual_range" | "incremental" | "specific_dates";
   window: {
     startDate: string;
     endDate: string;
@@ -145,6 +147,7 @@ function todayIsoDate(): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_SYNC_WINDOW_DAYS = 3;
+const MAX_SPECIFIC_SYNC_DATES = 31;
 
 function parseIsoDate(value: string): number {
   return Date.parse(`${value}T00:00:00.000Z`);
@@ -155,7 +158,46 @@ function inclusiveDaySpan(startDate: string, endDate: string): number {
 }
 
 function formatSyncWindow(window: { startDate: string; endDate: string }): string {
-  return `${window.startDate} to ${window.endDate}`;
+  return window.startDate === window.endDate ? window.startDate : `${window.startDate} to ${window.endDate}`;
+}
+
+function normalizeSpecificDates(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+}
+
+function syncModeLabel(value: SycamoreSyncBatch["syncMode"] | SycamoreSyncProgressSnapshot["syncMode"] | null): string {
+  if (value === "initial_backfill") {
+    return "Initial backfill";
+  }
+  if (value === "incremental") {
+    return "Incremental";
+  }
+  if (value === "specific_dates") {
+    return "Specific dates";
+  }
+  if (value === "manual_range") {
+    return "Manual range";
+  }
+  return "Not run yet";
+}
+
+function formatSpecificDatesSummary(dates: string[], maxVisible = 3): string {
+  if (dates.length === 0) {
+    return "No dates selected";
+  }
+  if (dates.length === 1) {
+    return dates[0]!;
+  }
+
+  const visibleDates = dates.slice(0, maxVisible).join(", ");
+  const overflow = dates.length > maxVisible ? ` +${dates.length - maxVisible} more` : "";
+  return `${dates.length} dates: ${visibleDates}${overflow}`;
+}
+
+function formatBatchScope(batch: Pick<SycamoreSyncBatch, "syncMode" | "selectedDates" | "overallWindow">, maxVisible = 3): string {
+  return batch.syncMode === "specific_dates" && batch.selectedDates?.length
+    ? formatSpecificDatesSummary(batch.selectedDates, maxVisible)
+    : formatSyncWindow(batch.overallWindow);
 }
 
 function latestFailedJob(batch: SycamoreSyncBatch): SycamoreSyncBatch["failedJobs"][number] | null {
@@ -453,8 +495,11 @@ export function IngestionClient() {
   const [isStartingSync, setIsStartingSync] = useState(false);
   const [isRunningWorker, setIsRunningWorker] = useState(false);
   const [isCancelingSync, setIsCancelingSync] = useState(false);
+  const [syncModeSelection, setSyncModeSelection] = useState<IntakeSyncMode>("range");
   const [syncStartDate, setSyncStartDate] = useState(todayIsoDate);
   const [syncEndDate, setSyncEndDate] = useState(todayIsoDate);
+  const [syncSpecificDateInput, setSyncSpecificDateInput] = useState(todayIsoDate);
+  const [syncSpecificDates, setSyncSpecificDates] = useState<string[]>([]);
   const [syncStudentNamesText, setSyncStudentNamesText] = useState("");
   const [syncGrade, setSyncGrade] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -490,6 +535,42 @@ export function IngestionClient() {
 
   function openFilePicker() {
     fileInputRef.current?.click();
+  }
+
+  function changeSyncMode(nextMode: IntakeSyncMode) {
+    setSyncModeSelection(nextMode);
+    setError(null);
+  }
+
+  function addSpecificSyncDate(nextDate: string) {
+    const normalizedDate = nextDate.trim();
+    if (!normalizedDate) {
+      setError("Choose a date before adding it to the specific-date batch.");
+      return;
+    }
+
+    const normalizedDates = normalizeSpecificDates([...syncSpecificDates, normalizedDate]);
+    if (normalizedDates.length > MAX_SPECIFIC_SYNC_DATES) {
+      setError(`Specific-date syncs can include up to ${MAX_SPECIFIC_SYNC_DATES} dates.`);
+      return;
+    }
+
+    setSyncSpecificDates(normalizedDates);
+    setError(null);
+  }
+
+  function removeSpecificSyncDate(date: string) {
+    setSyncSpecificDates((currentDates) => currentDates.filter((value) => value !== date));
+    setError(null);
+  }
+
+  function onSpecificDateInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    addSpecificSyncDate(syncSpecificDateInput);
   }
 
   function onDropZoneDragEnter(event: DragEvent<HTMLLabelElement>) {
@@ -666,19 +747,36 @@ export function IngestionClient() {
 
   async function onSyncSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!syncStartDate || !syncEndDate) {
-      setError("Choose both a start date and end date for the Sycamore sync.");
-      return;
-    }
-    if (syncStartDate > syncEndDate) {
-      setError("Sycamore sync start date must be on or before the end date.");
+    if (syncModeSelection === "default") {
+      await onIncrementalSync();
       return;
     }
 
-    const payload: Record<string, unknown> = {
-      startDate: syncStartDate,
-      endDate: syncEndDate
-    };
+    const payload: Record<string, unknown> = {};
+
+    if (syncModeSelection === "range") {
+      if (!syncStartDate || !syncEndDate) {
+        setError("Choose both a start date and end date for the Sycamore sync.");
+        return;
+      }
+      if (syncStartDate > syncEndDate) {
+        setError("Sycamore sync start date must be on or before the end date.");
+        return;
+      }
+
+      payload.startDate = syncStartDate;
+      payload.endDate = syncEndDate;
+    }
+
+    if (syncModeSelection === "specific_dates") {
+      if (syncSpecificDates.length === 0) {
+        setError("Add at least one specific date for the Sycamore sync.");
+        return;
+      }
+
+      payload.dates = syncSpecificDates;
+    }
+
     if (parsedSyncStudentNames.length > 0) {
       payload.studentNames = parsedSyncStudentNames;
     }
@@ -816,28 +914,24 @@ export function IngestionClient() {
   const summary = useMemo(() => {
     if (lastResult?.sycamoreSync) {
       const result = lastResult.sycamoreSync;
-      const syncLabel =
-        result.syncMode === "initial_backfill"
-          ? "Initial backfill"
-          : result.syncMode === "incremental"
-            ? "Incremental"
-            : "Manual range";
+      const syncLabel = syncModeLabel(result.syncMode);
+      const scopeLabel = formatBatchScope(result, 4);
       if (result.status === "queued") {
-        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} is queued in the background as ${result.totalChunks} job${result.totalChunks === 1 ? "" : "s"}.`;
+        return `${syncLabel} Sycamore sync for ${scopeLabel} is queued in the background as ${result.totalChunks} job${result.totalChunks === 1 ? "" : "s"}.`;
       }
       if (result.status === "running") {
-        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} is running in the background. ${result.completedChunks} of ${result.totalChunks} job${result.totalChunks === 1 ? "" : "s"} finished so far.`;
+        return `${syncLabel} Sycamore sync for ${scopeLabel} is running in the background. ${result.completedChunks} of ${result.totalChunks} job${result.totalChunks === 1 ? "" : "s"} finished so far.`;
       }
       if (result.status === "canceling") {
-        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} is canceling. Remaining queued jobs will not run, and the active chunk will stop at the next safe checkpoint.`;
+        return `${syncLabel} Sycamore sync for ${scopeLabel} is canceling. Remaining queued jobs will not run, and the active chunk will stop at the next safe checkpoint.`;
       }
       if (result.status === "canceled") {
-        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} was canceled after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. Rows written before cancel took effect remain mirrored in Supabase.`;
+        return `${syncLabel} Sycamore sync for ${scopeLabel} was canceled after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. Rows written before cancel took effect remain mirrored in Supabase.`;
       }
       if (result.status === "failed") {
-        return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} finished with failures after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. ${formatFailedBatchMessage(result)}`;
+        return `${syncLabel} Sycamore sync for ${scopeLabel} finished with failures after storing ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}. ${formatFailedBatchMessage(result)}`;
       }
-      return `${syncLabel} Sycamore sync ${result.window.startDate} to ${result.window.endDate} stored ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}${result.status === "partial" ? " with warnings" : ""}.`;
+      return `${syncLabel} Sycamore sync for ${scopeLabel} stored ${result.recordsUpserted} record${result.recordsUpserted === 1 ? "" : "s"}${result.status === "partial" ? " with warnings" : ""}.`;
     }
 
     return null;
@@ -902,9 +996,13 @@ export function IngestionClient() {
 
   const parsedSyncStudentNames = useMemo(() => parseStudentNamesInput(syncStudentNamesText), [syncStudentNamesText]);
   const hasTargetedSyncFilters = parsedSyncStudentNames.length > 0 || Boolean(syncGrade);
+  const isDefaultSyncMode = syncModeSelection === "default";
+  const isRangeSyncMode = syncModeSelection === "range";
+  const isSpecificDateSyncMode = syncModeSelection === "specific_dates";
   const flaggedRows = jobs.reduce((total, job) => total + job.rowsFlagged, 0);
-  const selectedRangeDays = inclusiveDaySpan(syncStartDate, syncEndDate);
-  const willChunkSelectedRange = selectedRangeDays > MAX_SYNC_WINDOW_DAYS;
+  const selectedRangeDays = isRangeSyncMode ? inclusiveDaySpan(syncStartDate, syncEndDate) : 0;
+  const willChunkSelectedRange = isRangeSyncMode && selectedRangeDays > MAX_SYNC_WINDOW_DAYS;
+  const specificDateJobCount = syncSpecificDates.length;
   const syncQueuedAt = syncBatch?.createdAt ?? null;
   const syncStartedAt = syncBatch?.activeJobStartedAt ?? syncProgress?.startedAt ?? null;
   const syncElapsedLabel =
@@ -969,7 +1067,7 @@ export function IngestionClient() {
       `${syncBatch.lastHeartbeatAt ? `Last worker heartbeat was ${formatDuration(syncBatch.lastHeartbeatAt, syncNow)} ago.` : "The worker has not reported a heartbeat recently."} ${syncBatch.status === "canceling" ? "Use Run next job now to finalize the cancellation." : "Use Run next job now to resume from the next claimable chunk."}`
     : (syncProgress?.message ??
         (syncBatch?.status === "queued"
-          ? `Queued ${syncBatch.totalChunks} background job${syncBatch.totalChunks === 1 ? "" : "s"} for ${formatSyncWindow(syncBatch.overallWindow)}.`
+          ? `Queued ${syncBatch.totalChunks} background job${syncBatch.totalChunks === 1 ? "" : "s"} for ${formatBatchScope(syncBatch, 4)}.`
           : syncBatch?.status === "canceling"
             ? "Cancel requested. No additional queued chunks will start."
             : syncBatch?.status === "canceled"
@@ -1020,7 +1118,7 @@ export function IngestionClient() {
               <div className="space-y-1">
                 <h2 className="font-display text-2xl text-[var(--color-ink)]">Sycamore intake</h2>
                 <p className="max-w-2xl text-sm text-[var(--color-muted)]">
-                  Daily intake runs here. Use a date range only for backfill, validation, or targeted checks.
+                  Daily intake runs here. Use a date range or exact selected dates for backfill, validation, or targeted checks.
                 </p>
               </div>
             </div>
@@ -1032,67 +1130,169 @@ export function IngestionClient() {
           </div>
 
           <form onSubmit={onSyncSubmit} className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-[1.45fr_0.55fr]">
-              <Field
-                label="Student name"
-                hint="Optional. Enter one name or use commas/new lines for multiple students."
-              >
-                <Input
-                  value={syncStudentNamesText}
-                  onChange={(event) => setSyncStudentNamesText(event.currentTarget.value)}
-                  placeholder="e.g. Aybach Charkas"
-                />
-              </Field>
-              <Field label="Grade" hint="Optional grade filter for targeted syncs.">
-                <Select value={syncGrade} onChange={(event) => setSyncGrade(event.currentTarget.value)}>
-                  <option value="">All grades</option>
-                  {["6", "7", "8", "9", "10", "11", "12"].map((grade) => (
-                    <option key={grade} value={grade}>
-                      Grade {grade}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
+            <Field
+              label="Sync mode"
+              hint="Choose a routine refresh, a contiguous backfill window, or a non-consecutive set of exact dates."
+            >
+              <div className="grid gap-2 md:grid-cols-3">
+                {[
+                  {
+                    value: "default" as const,
+                    label: "Default sync",
+                    description: "Resume from the last successful Sycamore window."
+                  },
+                  {
+                    value: "range" as const,
+                    label: "Date range",
+                    description: "Backfill or validate a continuous window."
+                  },
+                  {
+                    value: "specific_dates" as const,
+                    label: "Specific dates",
+                    description: "Queue exact, non-consecutive dates in one batch."
+                  }
+                ].map((option) => {
+                  const selected = syncModeSelection === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => changeSyncMode(option.value)}
+                      className={cn(
+                        "rounded-[1.1rem] border px-4 py-3 text-left transition",
+                        selected
+                          ? "border-[var(--color-primary)] bg-[rgba(17,94,89,0.08)] shadow-[0_12px_30px_rgba(17,94,89,0.08)]"
+                          : "border-[var(--color-line)] bg-white/80 hover:border-[var(--color-primary)]/40"
+                      )}
+                    >
+                      <p className="text-sm font-semibold text-[var(--color-ink)]">{option.label}</p>
+                      <p className="mt-1 text-sm leading-6 text-[var(--color-muted)]">{option.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Start date">
-                <Input type="date" value={syncStartDate} onChange={(event) => setSyncStartDate(event.currentTarget.value)} />
-              </Field>
-              <Field label="End date">
-                <Input type="date" value={syncEndDate} onChange={(event) => setSyncEndDate(event.currentTarget.value)} />
-              </Field>
-            </div>
+            {!isDefaultSyncMode ? (
+              <div className="grid gap-4 md:grid-cols-[1.45fr_0.55fr]">
+                <Field
+                  label="Student name"
+                  hint="Optional. Enter one name or use commas/new lines for multiple students."
+                >
+                  <Input
+                    value={syncStudentNamesText}
+                    onChange={(event) => setSyncStudentNamesText(event.currentTarget.value)}
+                    placeholder="e.g. Aybach Charkas"
+                  />
+                </Field>
+                <Field label="Grade" hint="Optional grade filter for targeted syncs.">
+                  <Select value={syncGrade} onChange={(event) => setSyncGrade(event.currentTarget.value)}>
+                    <option value="">All grades</option>
+                    {["6", "7", "8", "9", "10", "11", "12"].map((grade) => (
+                      <option key={grade} value={grade}>
+                        Grade {grade}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+            ) : null}
+
+            {isRangeSyncMode ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Start date">
+                  <Input type="date" value={syncStartDate} onChange={(event) => setSyncStartDate(event.currentTarget.value)} />
+                </Field>
+                <Field label="End date">
+                  <Input type="date" value={syncEndDate} onChange={(event) => setSyncEndDate(event.currentTarget.value)} />
+                </Field>
+              </div>
+            ) : null}
+
+            {isSpecificDateSyncMode ? (
+              <div className="space-y-3">
+                <Field
+                  label="Specific dates"
+                  hint="Add exact dates for a non-consecutive Sycamore batch. Duplicates are ignored."
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Input
+                      type="date"
+                      value={syncSpecificDateInput}
+                      onChange={(event) => setSyncSpecificDateInput(event.currentTarget.value)}
+                      onKeyDown={onSpecificDateInputKeyDown}
+                    />
+                    <Button type="button" variant="secondary" onClick={() => addSpecificSyncDate(syncSpecificDateInput)}>
+                      Add date
+                    </Button>
+                  </div>
+                </Field>
+
+                <div className="rounded-[1.1rem] border border-[var(--color-line)] bg-white/80 px-4 py-3">
+                  {syncSpecificDates.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {syncSpecificDates.map((date) => (
+                        <button
+                          key={date}
+                          type="button"
+                          onClick={() => removeSpecificSyncDate(date)}
+                          className="rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1 text-sm font-medium text-[var(--color-ink)] transition hover:border-[var(--color-primary)]/40 hover:text-[var(--color-primary)]"
+                        >
+                          {date} ×
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-[var(--color-muted)]">No specific dates selected yet.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-2">
                 <div className="flex flex-wrap gap-2">
-                  <StatusBadge tone={hasTargetedSyncFilters ? "warning" : "info"}>
-                    {hasTargetedSyncFilters ? "Date range required for targeted syncs" : "Default sync resumes from the last successful window"}
+                  <StatusBadge tone={isDefaultSyncMode ? "info" : hasTargetedSyncFilters ? "warning" : "info"}>
+                    {isDefaultSyncMode
+                      ? "Default sync resumes from the last successful window"
+                      : isSpecificDateSyncMode
+                        ? `${specificDateJobCount} specific date${specificDateJobCount === 1 ? "" : "s"} selected`
+                        : hasTargetedSyncFilters
+                          ? "Explicit dates selected for targeted sync"
+                          : "Manual date range"}
                   </StatusBadge>
+                  {isSpecificDateSyncMode && specificDateJobCount > 0 ? (
+                    <StatusBadge tone="warning">
+                      {specificDateJobCount} queued job{specificDateJobCount === 1 ? "" : "s"}
+                    </StatusBadge>
+                  ) : null}
                   {willChunkSelectedRange ? (
                     <StatusBadge tone="warning">{MAX_SYNC_WINDOW_DAYS}-day chunking enabled</StatusBadge>
                   ) : null}
                 </div>
                 <p className="text-sm text-[var(--color-muted)]">
-                  {hasTargetedSyncFilters
-                    ? "Student and grade filters only run with an explicit start and end date."
-                    : "Use the default action for routine refreshes and the date-range action for backfill. Cancel stops remaining queued work but does not roll back rows already mirrored."}
+                  {isDefaultSyncMode
+                    ? "Use the default action for routine refreshes. The worker resumes from the last successful Sycamore window."
+                    : isSpecificDateSyncMode
+                      ? `Targeted filters are allowed here. Queue up to ${MAX_SPECIFIC_SYNC_DATES} exact dates, and each selected date will run as its own job.`
+                      : hasTargetedSyncFilters
+                        ? "Student and grade filters run against the explicit range you choose."
+                        : "Use a contiguous date range for backfill and validation. Wider windows will be split into background jobs automatically."}
                 </p>
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button
-                  type="button"
-                  variant="primary"
-                  disabled={isSyncing || hasTargetedSyncFilters}
-                  onClick={() => void onIncrementalSync()}
-                >
-                  {isSyncing ? "Syncing Sycamore..." : "Default sync"}
-                </Button>
-                <Button type="submit" variant="secondary" disabled={isSyncing}>
-                  {isSyncing ? "Syncing Sycamore..." : hasTargetedSyncFilters ? "Sync filtered range" : "Sync selected range"}
-                </Button>
-              </div>
+              <Button type="submit" variant="primary" disabled={isSyncing}>
+                {isSyncing
+                  ? "Syncing Sycamore..."
+                  : isDefaultSyncMode
+                    ? "Default sync"
+                    : isSpecificDateSyncMode
+                      ? hasTargetedSyncFilters
+                        ? "Sync filtered dates"
+                        : "Sync selected dates"
+                      : hasTargetedSyncFilters
+                        ? "Sync filtered range"
+                        : "Sync selected range"}
+              </Button>
             </div>
           </form>
 
@@ -1110,7 +1310,7 @@ export function IngestionClient() {
                     </p>
                     {syncBatch ? (
                       <p className="max-w-2xl text-sm leading-7 text-[var(--color-muted)]">
-                        Background batching is active for {formatSyncWindow(syncBatch.overallWindow)}. Current job{" "}
+                        Background batching is active for {formatBatchScope(syncBatch, 4)}. Current job{" "}
                         {syncBatch.activeChunkIndex + 1} of {syncBatch.totalChunks}: {formatSyncWindow(syncBatch.currentWindow)}.
                       </p>
                     ) : null}
@@ -1210,17 +1410,15 @@ export function IngestionClient() {
                 <div className="grid gap-4 md:grid-cols-4">
                   <div className="rounded-[1.25rem] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">
-                      Overall window
+                      {syncBatch.syncMode === "specific_dates" ? "Selected dates" : "Overall window"}
                     </p>
                     <p className="mt-2 text-sm font-semibold text-[var(--color-ink)]">
-                      {formatSyncWindow(syncBatch.overallWindow)}
+                      {formatBatchScope(syncBatch, 4)}
                     </p>
                     <p className="mt-1 text-sm text-[var(--color-muted)]">
-                      {syncBatch.syncMode === "initial_backfill"
-                        ? "Initial backfill plan"
-                        : syncBatch.syncMode === "manual_range"
-                          ? "Manual backfill plan"
-                          : "Incremental sync plan"}
+                      {syncBatch.syncMode === "specific_dates"
+                        ? `${syncBatch.selectedDates?.length ?? syncBatch.totalChunks} explicit date job${(syncBatch.selectedDates?.length ?? syncBatch.totalChunks) === 1 ? "" : "s"} queued`
+                        : `${syncModeLabel(syncBatch.syncMode)} plan`}
                     </p>
                   </div>
                   <div className="rounded-[1.25rem] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
@@ -1231,7 +1429,9 @@ export function IngestionClient() {
                       {formatSyncWindow(syncBatch.currentWindow)}
                     </p>
                     <p className="mt-1 text-sm text-[var(--color-muted)]">
-                      Up to {syncBatch.chunkSizeDays} days per queued run
+                      {syncBatch.syncMode === "specific_dates"
+                        ? "One explicit date per queued run"
+                        : `Up to ${syncBatch.chunkSizeDays} days per queued run`}
                     </p>
                   </div>
                   <div className="rounded-[1.25rem] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
@@ -1409,7 +1609,7 @@ export function IngestionClient() {
                   <thead>
                     <tr>
                       <th className={tableHeadCellClassName}>Started</th>
-                      <th className={tableHeadCellClassName}>Window</th>
+                      <th className={tableHeadCellClassName}>Scope</th>
                       <th className={tableHeadCellClassName}>Status</th>
                       <th className={tableHeadCellClassName}>Jobs</th>
                       <th className={tableHeadCellClassName}>Rows stored</th>
@@ -1423,14 +1623,10 @@ export function IngestionClient() {
                         <td className={tableCellClassName}>
                           <div className="space-y-1">
                             <p className="font-semibold text-[var(--color-ink)]">
-                              {formatSyncWindow(batch.overallWindow)}
+                              {formatBatchScope(batch, 3)}
                             </p>
                             <p className="text-xs uppercase tracking-[0.16em] text-[var(--color-subtle)]">
-                              {batch.syncMode === "initial_backfill"
-                                ? "Initial backfill"
-                                : batch.syncMode === "incremental"
-                                  ? "Incremental"
-                                  : "Manual range"}
+                              {syncModeLabel(batch.syncMode)}
                             </p>
                           </div>
                         </td>
@@ -1581,7 +1777,7 @@ export function IngestionClient() {
                 <h2 className="font-display text-2xl text-[var(--color-ink)]">Sync warnings</h2>
                 <p className="text-sm text-[var(--color-muted)]">
                   {selectedWarningBatch
-                    ? `Showing ${selectedWarningBatch.warningsCount} warning${selectedWarningBatch.warningsCount === 1 ? "" : "s"} for ${formatSyncWindow(selectedWarningBatch.overallWindow)}.`
+                    ? `Showing ${selectedWarningBatch.warningsCount} warning${selectedWarningBatch.warningsCount === 1 ? "" : "s"} for ${formatBatchScope(selectedWarningBatch, 4)}.`
                     : "Use these to understand what still needs follow-up after the latest Sycamore sync."}
                 </p>
               </div>

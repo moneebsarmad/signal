@@ -61,6 +61,7 @@ export interface SycamoreSyncBatchSummary {
   syncLogId: string | null;
   status: SycamoreSyncBatchStatus;
   syncMode: SycamoreSyncMode;
+  selectedDates: string[] | null;
   window: {
     startDate: string;
     endDate: string;
@@ -361,6 +362,14 @@ function chunkSizeDays(jobs: SycamoreSyncJobRecord[]): number {
   return Math.max(...jobs.map((job) => inclusiveDaySpan(job.window.startDate, job.window.endDate)), 1);
 }
 
+function summarizeSelectedDates(jobs: SycamoreSyncJobRecord[]): string[] | null {
+  if (jobs[0]?.syncMode !== "specific_dates") {
+    return null;
+  }
+
+  return [...new Set(jobs.map((job) => job.window.startDate))].sort((left, right) => left.localeCompare(right));
+}
+
 function isTerminalJobStatus(status: SycamoreAsyncJobStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
@@ -434,6 +443,7 @@ export function summarizeSycamoreSyncBatch(
     syncLogId: activeJob?.syncLogId ?? [...sorted].map((job) => job.syncLogId).find((value): value is string => Boolean(value)) ?? null,
     status,
     syncMode: sorted[0]!.syncMode,
+    selectedDates: summarizeSelectedDates(sorted),
     window: {
       startDate: [...sorted].map((job) => job.window.startDate).sort((left, right) => left.localeCompare(right))[0] ?? sorted[0]!.window.startDate,
       endDate: [...sorted].map((job) => job.window.endDate).sort((left, right) => right.localeCompare(left))[0] ?? sorted[0]!.window.endDate
@@ -470,12 +480,17 @@ function buildJobWindowRequest(
   request: SycamoreDirectSyncRequest,
   window: { startDate: string; endDate: string }
 ): SycamoreDirectSyncRequest {
-  return sycamoreDirectSyncRequestSchema.parse({
+  const parsed = sycamoreDirectSyncRequestSchema.parse({
     ...request,
+    dates: undefined,
     incremental: undefined,
     startDate: window.startDate,
     endDate: window.endDate
   });
+
+  return Object.fromEntries(
+    Object.entries(parsed).filter(([, value]) => value !== undefined)
+  ) as SycamoreDirectSyncRequest;
 }
 
 function createDefaultSyncStore(): SycamoreStore {
@@ -556,6 +571,7 @@ function createBatchQueuedAuditEvent(input: {
     payload: {
       triggeredBy: input.batch.triggeredBy,
       syncMode: input.batch.syncMode,
+      selectedDates: input.batch.selectedDates,
       totalChunks: input.batch.totalChunks,
       chunkSizeDays: input.batch.chunkSizeDays,
       overallWindow: input.batch.overallWindow,
@@ -638,6 +654,7 @@ function createBatchCancelRequestedAuditEvent(input: {
     payload: {
       triggeredBy: input.batch.triggeredBy,
       syncMode: input.batch.syncMode,
+      selectedDates: input.batch.selectedDates,
       status: input.batch.status,
       overallWindow: input.batch.overallWindow,
       totalChunks: input.batch.totalChunks,
@@ -668,6 +685,7 @@ function createBatchFinishedAuditEvent(input: {
     payload: {
       triggeredBy: input.batch.triggeredBy,
       syncMode: input.batch.syncMode,
+      selectedDates: input.batch.selectedDates,
       status: input.batch.status,
       overallWindow: input.batch.overallWindow,
       totalChunks: input.batch.totalChunks,
@@ -1041,8 +1059,12 @@ export async function enqueueSycamoreSyncBatch(input: {
     request,
     store: syncStore
   });
-  const windows =
-    inclusiveDaySpan(plan.window.startDate, plan.window.endDate) > maxAsyncWindowDays()
+  const windows = plan.selectedDates?.length
+    ? plan.selectedDates.map((date) => ({
+        startDate: date,
+        endDate: date
+      }))
+    : inclusiveDaySpan(plan.window.startDate, plan.window.endDate) > maxAsyncWindowDays()
       ? buildSyncWindows(plan.window.startDate, plan.window.endDate, maxAsyncWindowDays())
       : [plan.window];
   const batchId = crypto.randomUUID();
