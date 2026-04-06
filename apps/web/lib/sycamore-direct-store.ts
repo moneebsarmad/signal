@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type SycamoreSyncStatus = "running" | "success" | "partial" | "failed" | "canceled";
-export type SycamoreSyncMode = "initial_backfill" | "incremental" | "manual_range";
+export type SycamoreSyncMode = "initial_backfill" | "incremental" | "manual_range" | "specific_dates";
 
 export interface SycamoreDisciplineLogRecord {
   id?: string;

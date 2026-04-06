@@ -117,7 +117,7 @@ interface DashboardPayload {
       recordsUpserted: number;
       status: "running" | "success" | "partial" | "failed" | "canceled";
       errorMessage: string | null;
-      syncMode: "initial_backfill" | "incremental" | "manual_range" | null;
+      syncMode: "initial_backfill" | "incremental" | "manual_range" | "specific_dates" | null;
       windowStartDate: string | null;
       windowEndDate: string | null;
     } | null;
@@ -160,12 +160,15 @@ const DASHBOARD_REALTIME_TABLES = [
   "audit_events"
 ];
 
-function syncModeLabel(value: "initial_backfill" | "incremental" | "manual_range" | null): string {
+function syncModeLabel(value: "initial_backfill" | "incremental" | "manual_range" | "specific_dates" | null): string {
   if (value === "initial_backfill") {
     return "Initial backfill";
   }
   if (value === "incremental") {
     return "Incremental";
+  }
+  if (value === "specific_dates") {
+    return "Specific dates";
   }
   if (value === "manual_range") {
     return "Manual range";

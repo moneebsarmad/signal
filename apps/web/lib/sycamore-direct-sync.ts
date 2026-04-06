@@ -32,11 +32,19 @@ import {
 
 const isoDateOnlySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const sycamoreGradeSchema = z.enum(["6", "7", "8", "9", "10", "11", "12"]);
+export const MAX_EXPLICIT_SYNC_DATES = 31;
+
+export function normalizeSpecificSyncDates(values?: string[] | null): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
+    left.localeCompare(right)
+  );
+}
 
 export const sycamoreDirectSyncRequestSchema = z
   .object({
     startDate: isoDateOnlySchema.optional(),
     endDate: isoDateOnlySchema.optional(),
+    dates: z.array(isoDateOnlySchema).optional(),
     incremental: z.boolean().optional(),
     grade: sycamoreGradeSchema.optional(),
     studentNames: z.array(z.string().trim().min(1)).max(50).optional(),
@@ -44,11 +52,32 @@ export const sycamoreDirectSyncRequestSchema = z
     triggered_by: z.enum(["manual", "cron"]).optional()
   })
   .superRefine((value, context) => {
-    if ((value.grade || value.studentNames?.length || value.studentIds?.length) && !(value.startDate && value.endDate)) {
+    const specificDates = normalizeSpecificSyncDates(value.dates);
+    const hasExplicitRange = Boolean(value.startDate || value.endDate);
+    const hasSpecificDates = specificDates.length > 0;
+    const hasTargetedFilters = Boolean(value.grade || value.studentNames?.length || value.studentIds?.length);
+
+    if (value.dates && specificDates.length === 0) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["startDate"],
-        message: "Targeted student or grade sync requires both `startDate` and `endDate`."
+        path: ["dates"],
+        message: "Provide at least one specific date."
+      });
+    }
+
+    if (specificDates.length > MAX_EXPLICIT_SYNC_DATES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dates"],
+        message: `A specific-date sync supports up to ${MAX_EXPLICIT_SYNC_DATES} dates.`
+      });
+    }
+
+    if (hasTargetedFilters && !(hasSpecificDates || (value.startDate && value.endDate))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dates"],
+        message: "Targeted student or grade sync requires either a manual date range or specific dates."
       });
     }
 
@@ -68,11 +97,19 @@ export const sycamoreDirectSyncRequestSchema = z
       });
     }
 
-    if (value.incremental && (value.startDate || value.endDate)) {
+    if (hasExplicitRange && hasSpecificDates) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dates"],
+        message: "Specific dates cannot be combined with `startDate` and `endDate`."
+      });
+    }
+
+    if (value.incremental && (value.startDate || value.endDate || hasSpecificDates)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["incremental"],
-        message: "Incremental sync cannot be combined with an explicit date range."
+        message: "Incremental sync cannot be combined with explicit dates."
       });
     }
 
@@ -202,6 +239,7 @@ export interface SycamoreDirectSyncPlan {
     startDate: string;
     endDate: string;
   };
+  selectedDates?: string[];
 }
 
 interface StudentSyncTargets {
@@ -666,9 +704,19 @@ function entryOccurredOn(entry: Record<string, unknown>): string | null {
   return toIsoDateOnly(pickFirst(entry, [...SYCAMORE_DATE_KEYS, ...SYCAMORE_CREATED_AT_KEYS, "__sycamoreOccurredOn"]));
 }
 
-function entryFallsWithinWindow(entry: Record<string, unknown>, window: { startDate: string; endDate: string }): boolean {
+function entryFallsWithinWindow(
+  entry: Record<string, unknown>,
+  window: { startDate: string; endDate: string },
+  selectedDates?: Set<string> | null
+): boolean {
   const occurredOn = entryOccurredOn(entry);
-  return Boolean(occurredOn && occurredOn >= window.startDate && occurredOn <= window.endDate);
+  if (!occurredOn) {
+    return false;
+  }
+  if (selectedDates && selectedDates.size > 0) {
+    return selectedDates.has(occurredOn);
+  }
+  return occurredOn >= window.startDate && occurredOn <= window.endDate;
 }
 
 function hasResolvableDisciplineEntry(entry: Record<string, unknown>): boolean {
@@ -879,6 +927,7 @@ function filterRosterStudents(
 
 async function fetchDisciplineEntriesByStudentFallback(
   window: { startDate: string; endDate: string },
+  selectedDates: string[] | undefined,
   config: SycamoreClientConfig,
   dependencies: SycamoreClientDependencies,
   sleep: (ms: number) => Promise<void>,
@@ -889,6 +938,7 @@ async function fetchDisciplineEntriesByStudentFallback(
   onProgress?: (progress: StudentFallbackDiscoveryProgress) => void | Promise<void>,
   prefetchedStudents?: Array<Record<string, unknown>> | null
 ): Promise<DiscoveredDisciplineEntries> {
+  const selectedDateSet = selectedDates?.length ? new Set(selectedDates) : null;
   const students =
     prefetchedStudents && prefetchedStudents.length > 0
       ? prefetchedStudents
@@ -957,7 +1007,7 @@ async function fetchDisciplineEntriesByStudentFallback(
       try {
         const overview = await fetchSycamoreStudentDisciplineOverview(studentId, config, dependencies);
         for (const row of overview) {
-          if (!entryFallsWithinWindow(row, window)) {
+          if (!entryFallsWithinWindow(row, window, selectedDateSet)) {
             continue;
           }
 
@@ -990,6 +1040,7 @@ async function fetchDisciplineEntriesByStudentFallback(
 
 async function discoverDisciplineEntries(
   window: { startDate: string; endDate: string },
+  selectedDates: string[] | undefined,
   config: SycamoreClientConfig,
   dependencies: SycamoreClientDependencies,
   sleep: (ms: number) => Promise<void>,
@@ -998,9 +1049,11 @@ async function discoverDisciplineEntries(
   onProgress?: (progress: StudentFallbackDiscoveryProgress) => void | Promise<void>,
   prefetchedRosterStudents?: Array<Record<string, unknown>> | null
 ): Promise<DiscoveredDisciplineEntries> {
+  const selectedDateSet = selectedDates?.length ? new Set(selectedDates) : null;
   if (targets) {
     return fetchDisciplineEntriesByStudentFallback(
       window,
+      selectedDates,
       config,
       dependencies,
       sleep,
@@ -1016,6 +1069,7 @@ async function discoverDisciplineEntries(
   if (sycamoreDiscoveryStrategy() === "student_overview") {
     return fetchDisciplineEntriesByStudentFallback(
       window,
+      selectedDates,
       config,
       dependencies,
       sleep,
@@ -1029,7 +1083,7 @@ async function discoverDisciplineEntries(
   }
 
   const schoolLevel = await fetchSycamoreDisciplineRange(window, config, dependencies);
-  const datedSchoolRecords = schoolLevel.records.filter((record) => entryFallsWithinWindow(record, window));
+  const datedSchoolRecords = schoolLevel.records.filter((record) => entryFallsWithinWindow(record, window, selectedDateSet));
   const outOfWindowSchoolRecords = schoolLevel.records.length - datedSchoolRecords.length;
   const usableSchoolRecords = datedSchoolRecords.filter(hasResolvableDisciplineEntry);
   const unusableSchoolRecords = datedSchoolRecords.length - usableSchoolRecords.length;
@@ -1062,6 +1116,7 @@ async function discoverDisciplineEntries(
   if (hintTargets.targets && hintTargets.unmatchedHintCount === 0) {
     const candidateFallback = await fetchDisciplineEntriesByStudentFallback(
       window,
+      selectedDates,
       config,
       dependencies,
       sleep,
@@ -1083,6 +1138,7 @@ async function discoverDisciplineEntries(
 
   const fallback = await fetchDisciplineEntriesByStudentFallback(
     window,
+    selectedDates,
     config,
     dependencies,
     sleep,
@@ -1280,6 +1336,18 @@ async function emitSycamoreSyncProgress(
 }
 
 async function resolveSyncPlan(store: SycamoreStore, request: SycamoreDirectSyncRequest): Promise<SycamoreDirectSyncPlan> {
+  const selectedDates = normalizeSpecificSyncDates(request.dates);
+  if (selectedDates.length > 0) {
+    return {
+      syncMode: "specific_dates",
+      window: {
+        startDate: selectedDates[0]!,
+        endDate: selectedDates.at(-1)!
+      },
+      selectedDates
+    };
+  }
+
   if (request.startDate && request.endDate) {
     return {
       syncMode: "manual_range",
@@ -1538,6 +1606,7 @@ export async function runSycamoreDirectSync(input: RunSycamoreDirectSyncInput): 
     });
     const fetched = await discoverDisciplineEntries(
       plan.window,
+      plan.selectedDates,
       config,
       dependencies,
       sleep,

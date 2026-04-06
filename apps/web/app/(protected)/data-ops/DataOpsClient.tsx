@@ -74,7 +74,7 @@ interface DataOpsSnapshot {
     } | null;
     lastRecordsDiscovered: number | null;
     lastRecordsUpserted: number | null;
-    lastSyncMode: "initial_backfill" | "manual_range" | "incremental" | null;
+    lastSyncMode: "initial_backfill" | "manual_range" | "incremental" | "specific_dates" | null;
     error?: string;
   };
   review: {

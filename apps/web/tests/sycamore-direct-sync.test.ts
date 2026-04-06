@@ -1387,6 +1387,116 @@ test("runSycamoreDirectSync limits untargeted student-overview discovery to grad
   );
 });
 
+test("runSycamoreDirectSync keeps explicit specific-date syncs scoped to the selected dates only", async () => {
+  const { store, disciplineLogs } = createInMemorySycamoreStore();
+
+  await withEnv(
+    {
+      SYCAMORE_ACCESS_TOKEN: "token-123",
+      SYCAMORE_SCHOOL_ID: "1002",
+      SYCAMORE_API_BASE_URL: "https://school.sycamoreeducation.com/api/v1",
+      SYCAMORE_REQUEST_DELAY_MS: "0",
+      SYCAMORE_DISCOVERY_STRATEGY: "school_feed"
+    },
+    async () => {
+      const result = await runSycamoreDirectSync({
+        request: {
+          dates: ["2026-03-12", "2026-03-10"]
+        },
+        triggeredBy: "manual",
+        store,
+        config: {
+          baseUrl: "https://school.sycamoreeducation.com/api/v1",
+          accessToken: "token-123",
+          schoolId: "1002",
+          disciplinePathTemplate: "/School/{schoolId}/Discipline",
+          studentsPathTemplate: "/School/{schoolId}/Students",
+          timeoutMs: 2_000,
+          maxAttempts: 1,
+          retryBaseDelayMs: 1
+        },
+        dependencies: {
+          fetchImpl: async (input) => {
+            const url = String(input);
+            if (url.endsWith("/School/1002/Students")) {
+              return new Response(
+                JSON.stringify([{ ID: "stu-ext-1", FirstName: "Jane", LastName: "Doe", Grade: "8" }]),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.includes("/School/1002/Discipline") && url.includes("Date=2026-03-10")) {
+              return new Response(
+                JSON.stringify({
+                  Data: [{ LogID: "log-10", StudentID: "stu-ext-1", StudentName: "Jane Doe", Grade: "8" }]
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.includes("/School/1002/Discipline") && url.includes("Date=2026-03-11")) {
+              return new Response(
+                JSON.stringify({
+                  Data: [{ LogID: "log-11", StudentID: "stu-ext-1", StudentName: "Jane Doe", Grade: "8" }]
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.includes("/School/1002/Discipline") && url.includes("Date=2026-03-12")) {
+              return new Response(
+                JSON.stringify({
+                  Data: [{ LogID: "log-12", StudentID: "stu-ext-1", StudentName: "Jane Doe", Grade: "8" }]
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.endsWith("/Student/stu-ext-1/Discipline/log-10")) {
+              return new Response(
+                JSON.stringify({
+                  Data: {
+                    LogID: "log-10",
+                    StudentID: "stu-ext-1",
+                    StudentName: "Jane Doe",
+                    Grade: "8",
+                    Type: "Disrespect",
+                    Description: "Incident on March 10",
+                    Date: "03/10/2026"
+                  }
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            if (url.endsWith("/Student/stu-ext-1/Discipline/log-12")) {
+              return new Response(
+                JSON.stringify({
+                  Data: {
+                    LogID: "log-12",
+                    StudentID: "stu-ext-1",
+                    StudentName: "Jane Doe",
+                    Grade: "8",
+                    Type: "Disrespect",
+                    Description: "Incident on March 12",
+                    Date: "03/12/2026"
+                  }
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+            throw new Error(`Unexpected URL ${url}`);
+          },
+          sleep: async () => {}
+        }
+      });
+
+      assert.equal(result.syncMode, "specific_dates");
+      assert.equal(result.recordsDiscovered, 2);
+      assert.equal(result.recordsUpserted, 2);
+      assert.deepEqual(
+        disciplineLogs.map((record) => record.sycamoreLogId).sort((left, right) => left.localeCompare(right)),
+        ["log-10", "log-12"]
+      );
+    }
+  );
+});
+
 test("resolveSycamoreDirectSyncPlan returns initial backfill when no successful sync exists", async () => {
   const { store } = createInMemorySycamoreStore();
 
@@ -1429,6 +1539,24 @@ test("resolveSycamoreDirectSyncPlan returns incremental when a successful sync e
   });
 });
 
+test("resolveSycamoreDirectSyncPlan normalizes explicit specific dates into a dedicated plan", async () => {
+  const { store } = createInMemorySycamoreStore();
+
+  const plan = await resolveSycamoreDirectSyncPlan({
+    store,
+    request: {
+      dates: ["2026-03-12", "2026-03-10", "2026-03-12", "2026-03-09"]
+    }
+  });
+
+  assert.equal(plan.syncMode, "specific_dates");
+  assert.deepEqual(plan.window, {
+    startDate: "2026-03-09",
+    endDate: "2026-03-12"
+  });
+  assert.deepEqual(plan.selectedDates, ["2026-03-09", "2026-03-10", "2026-03-12"]);
+});
+
 test("sycamoreDirectSyncRequestSchema rejects incremental sync with a grade filter", () => {
   const parsed = sycamoreDirectSyncRequestSchema.safeParse({
     incremental: true,
@@ -1436,6 +1564,26 @@ test("sycamoreDirectSyncRequestSchema rejects incremental sync with a grade filt
   });
 
   assert.equal(parsed.success, false);
+});
+
+test("sycamoreDirectSyncRequestSchema rejects incremental sync with explicit specific dates", () => {
+  const parsed = sycamoreDirectSyncRequestSchema.safeParse({
+    incremental: true,
+    dates: ["2026-03-10"]
+  });
+
+  assert.equal(parsed.success, false);
+});
+
+test("sycamoreDirectSyncRequestSchema accepts targeted syncs scoped by explicit dates", () => {
+  const parsed = sycamoreDirectSyncRequestSchema.safeParse({
+    dates: ["2026-03-10", "2026-03-12"],
+    grade: "8",
+    studentNames: ["Jane Doe"]
+  });
+
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.data?.dates, ["2026-03-10", "2026-03-12"]);
 });
 
 test("backfillSycamoreStudentLinks upserts roster students and links existing Sycamore logs", async () => {
