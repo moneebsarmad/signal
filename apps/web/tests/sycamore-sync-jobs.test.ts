@@ -194,47 +194,53 @@ function createMinimalSyncStore(): SycamoreStore {
 }
 
 test("summarizeSycamoreSyncBatch reports the active running job and aggregate counts", () => {
-  const summary = summarizeSycamoreSyncBatch(
-    [
-      makeJob({
-        id: "job_0",
-        sequenceIndex: 0,
-        totalJobs: 3,
-        status: "succeeded",
-        resultStatus: "success",
-        syncLogId: "sync_0",
-        startedAt: "2026-03-20T12:00:00.000Z",
-        completedAt: "2026-03-20T12:01:00.000Z",
-        recordsDiscovered: 4,
-        recordsUpserted: 4,
-        window: { startDate: "2026-03-01", endDate: "2026-03-14" }
-      }),
-      makeJob({
-        id: "job_1",
-        sequenceIndex: 1,
-        totalJobs: 3,
-        status: "running",
-        syncLogId: "sync_1",
-        progress: makeProgress(),
-        startedAt: "2026-03-20T12:02:00.000Z",
-        recordsDiscovered: 7,
-        recordsUpserted: 0,
-        warnings: ["detail_retry:1"],
-        warningsCount: 1,
-        window: { startDate: "2026-03-15", endDate: "2026-03-28" }
-      }),
-      makeJob({
-        id: "job_2",
-        sequenceIndex: 2,
-        totalJobs: 3,
-        status: "queued",
-        window: { startDate: "2026-03-29", endDate: "2026-03-31" }
-      })
-    ],
+  const summary = withEnv(
     {
-      nowIso: "2026-03-20T12:10:00.000Z"
-    }
-  );
+      SYCAMORE_ASYNC_STALE_AFTER_MINUTES: "15"
+    },
+    () =>
+      summarizeSycamoreSyncBatch(
+        [
+          makeJob({
+            id: "job_0",
+            sequenceIndex: 0,
+            totalJobs: 3,
+            status: "succeeded",
+            resultStatus: "success",
+            syncLogId: "sync_0",
+            startedAt: "2026-03-20T12:00:00.000Z",
+            completedAt: "2026-03-20T12:01:00.000Z",
+            recordsDiscovered: 4,
+            recordsUpserted: 4,
+            window: { startDate: "2026-03-01", endDate: "2026-03-14" }
+          }),
+          makeJob({
+            id: "job_1",
+            sequenceIndex: 1,
+            totalJobs: 3,
+            status: "running",
+            syncLogId: "sync_1",
+            progress: makeProgress(),
+            startedAt: "2026-03-20T12:02:00.000Z",
+            recordsDiscovered: 7,
+            recordsUpserted: 0,
+            warnings: ["detail_retry:1"],
+            warningsCount: 1,
+            window: { startDate: "2026-03-15", endDate: "2026-03-28" }
+          }),
+          makeJob({
+            id: "job_2",
+            sequenceIndex: 2,
+            totalJobs: 3,
+            status: "queued",
+            window: { startDate: "2026-03-29", endDate: "2026-03-31" }
+          })
+        ],
+        {
+          nowIso: "2026-03-20T12:10:00.000Z"
+        }
+      )
+  ) as ReturnType<typeof summarizeSycamoreSyncBatch>;
 
   assert.ok(summary);
   assert.equal(summary.createdAt, "2026-03-20T12:00:00.000Z");
@@ -353,6 +359,33 @@ test("summarizeSycamoreSyncBatch flags stale running jobs from heartbeat age", (
   assert.equal(summary.isStalled, true);
 });
 
+test("summarizeSycamoreSyncBatch uses a tighter default stale window", () => {
+  const summary = withEnv(
+    {
+      SYCAMORE_ASYNC_STALE_AFTER_MINUTES: undefined
+    },
+    () =>
+      summarizeSycamoreSyncBatch(
+        [
+          makeJob({
+            id: "job_stale_default_1",
+            status: "running",
+            startedAt: "2026-03-20T12:00:00.000Z",
+            lastHeartbeatAt: "2026-03-20T12:00:00.000Z",
+            progress: makeProgress()
+          })
+        ],
+        {
+          nowIso: "2026-03-20T12:07:00.000Z"
+        }
+      )
+  ) as ReturnType<typeof summarizeSycamoreSyncBatch>;
+
+  assert.ok(summary);
+  assert.equal(summary.staleAfterMinutes, 6);
+  assert.equal(summary.isStalled, true);
+});
+
 test("summarizeSycamoreSyncBatch treats cancel_requested jobs as an active canceling batch", () => {
   const summary = summarizeSycamoreSyncBatch([
     makeJob({
@@ -438,7 +471,10 @@ test("enqueueSycamoreSyncBatch splits wide manual ranges into queued windows", a
     },
     triggeredBy: "manual",
     syncStore: createMinimalSyncStore(),
-    jobStore
+    jobStore,
+    auditSink: {
+      async append() {}
+    }
   });
 
   assert.equal(result.alreadyQueued, false);
@@ -530,7 +566,10 @@ test("enqueueSycamoreSyncBatch also chunks wide incremental gaps into 3-day wind
             };
           }
         },
-        jobStore
+        jobStore,
+        auditSink: {
+          async append() {}
+        }
       });
 
       assert.equal(result.batch.syncMode, "incremental");
@@ -593,7 +632,10 @@ test("enqueueSycamoreSyncBatch reuses the active batch instead of queuing a dupl
   const result = await enqueueSycamoreSyncBatch({
     triggeredBy: "manual",
     syncStore: createMinimalSyncStore(),
-    jobStore
+    jobStore,
+    auditSink: {
+      async append() {}
+    }
   });
 
   assert.equal(result.alreadyQueued, true);
@@ -863,6 +905,112 @@ test("runNextQueuedSycamoreSyncJob appends start, completion, and final batch au
   assert.equal(auditEvents.every((event) => event.actor === "admin@school.org"), true);
   assert.equal(auditEvents[0]?.entityType, "sycamore_sync_job");
   assert.equal(auditEvents[2]?.entityType, "sycamore_sync_batch");
+});
+
+test("runNextQueuedSycamoreSyncJob refreshes heartbeats while sync work is still running", async () => {
+  const claimedJob = makeJob({
+    id: "job_run_heartbeat_1",
+    batchId: "batch_run_heartbeat_1",
+    sequenceIndex: 0,
+    totalJobs: 1,
+    status: "running",
+    attemptCount: 1,
+    startedAt: "2026-03-20T12:00:00.000Z",
+    lastHeartbeatAt: "2026-03-20T12:00:00.000Z"
+  });
+
+  let completedJob = claimedJob;
+  const runningUpdates: Array<Parameters<JobStore["updateRunningSyncJob"]>[1]> = [];
+  const jobStore = createJobStoreStub({
+    async listSyncJobs() {
+      return [completedJob];
+    },
+    async listSyncJobsByBatch(batchId: string) {
+      return batchId === completedJob.batchId ? [completedJob] : [];
+    },
+    async getSyncJobById(id: string) {
+      return completedJob.id === id ? completedJob : null;
+    },
+    async claimNextSyncJob() {
+      return claimedJob;
+    },
+    async updateRunningSyncJob(id, patch) {
+      runningUpdates.push(patch);
+      completedJob = {
+        ...completedJob,
+        id,
+        syncLogId: patch.syncLogId === undefined ? completedJob.syncLogId : (patch.syncLogId ?? null),
+        progress: patch.progress === undefined ? completedJob.progress : (patch.progress ?? null),
+        recordsDiscovered: patch.recordsDiscovered ?? completedJob.recordsDiscovered,
+        recordsUpserted: patch.recordsUpserted ?? completedJob.recordsUpserted,
+        lastHeartbeatAt: new Date().toISOString()
+      };
+    },
+    async completeSyncJob(id, patch) {
+      completedJob = {
+        ...completedJob,
+        id,
+        status: "succeeded",
+        resultStatus: patch.resultStatus,
+        syncLogId: patch.syncLogId ?? null,
+        recordsDiscovered: patch.recordsDiscovered,
+        recordsUpserted: patch.recordsUpserted,
+        warnings: patch.warnings,
+        warningsCount: patch.warnings.length,
+        completedAt: patch.completedAt,
+        lastHeartbeatAt: patch.completedAt,
+        errorMessage: patch.errorMessage ?? null
+      };
+    }
+  });
+
+  const result = await runNextQueuedSycamoreSyncJob({
+    actorEmail: "admin@school.org",
+    syncStore: createMinimalSyncStore(),
+    jobStore,
+    auditSink: {
+      async append() {}
+    },
+    heartbeatIntervalMs: 5,
+    runSync: async ({ onProgress }) => {
+      if (onProgress) {
+        await onProgress(
+          makeProgress({
+            syncLogId: "sync_log_heartbeat_1",
+            discoveredRecords: 6,
+            recordsUpserted: 0
+          })
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return {
+        syncLogId: "sync_log_heartbeat_1",
+        status: "success",
+        syncMode: "manual_range",
+        window: {
+          startDate: "2026-03-01",
+          endDate: "2026-03-03"
+        },
+        recordsDiscovered: 6,
+        recordsUpserted: 6,
+        warnings: [],
+        rosterSync: {
+          attempted: true,
+          fetchedStudents: 12,
+          upsertedStudents: 12,
+          linkedStudents: 12,
+          linkedDisciplineLogs: 0
+        },
+        startedAt: "2026-03-20T12:00:00.000Z",
+        completedAt: "2026-03-20T12:04:00.000Z",
+        triggeredBy: "manual",
+        errorMessage: null
+      };
+    }
+  });
+
+  assert.equal(result.executed, true);
+  assert.ok(runningUpdates.some((patch) => Object.keys(patch).length === 0));
 });
 
 test("runNextQueuedSycamoreSyncJob finalizes a claimed cancel_requested job without running sync work", async () => {

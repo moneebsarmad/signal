@@ -954,7 +954,7 @@ export function IngestionClient() {
       `The current background job has not reported a heartbeat for over ${syncBatch.staleAfterMinutes} minutes. It likely hit the 300-second worker limit or the worker was interrupted.`
     : (syncProgress?.stageDescription ??
         (syncBatch?.status === "queued"
-          ? "This queued Sycamore sync will run when the daily cron advances the queue, or immediately if you use Run next job now. Queued time does not count against the 300-second worker limit."
+          ? "This queued Sycamore sync will run when the 5-minute background scheduler advances the queue, or immediately if you use Run next job now. Queued time does not count against the 300-second worker limit."
           : syncBatch?.status === "canceling"
             ? "Cancel is in progress. Remaining queued jobs are being discarded, and the current chunk will stop at the next safe checkpoint."
             : syncBatch?.status === "canceled"

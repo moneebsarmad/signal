@@ -169,7 +169,8 @@ interface SycamoreAuditSink {
 type RowRecord = Record<string, unknown>;
 
 const DEFAULT_MAX_WINDOW_DAYS = 3;
-const DEFAULT_STALE_AFTER_MINUTES = 15;
+const DEFAULT_STALE_AFTER_MINUTES = 6;
+const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 15;
 
 function envNumber(name: string, fallback: number, min = 0): number {
   const raw = process.env[name]?.trim();
@@ -189,6 +190,43 @@ function maxAsyncWindowDays(): number {
 
 function staleAfterMinutes(): number {
   return envNumber("SYCAMORE_ASYNC_STALE_AFTER_MINUTES", DEFAULT_STALE_AFTER_MINUTES, 1);
+}
+
+function heartbeatIntervalMs(): number {
+  return envNumber("SYCAMORE_ASYNC_HEARTBEAT_INTERVAL_SECONDS", DEFAULT_HEARTBEAT_INTERVAL_SECONDS, 5) * 1000;
+}
+
+function startRunningJobHeartbeat(input: {
+  jobId: string;
+  jobStore: SycamoreSyncJobStore;
+  intervalMs: number;
+}): { stop: () => Promise<void> } {
+  let stopped = false;
+  let heartbeatWork = Promise.resolve();
+
+  const refreshHeartbeat = async () => {
+    if (stopped) {
+      return;
+    }
+    try {
+      await input.jobStore.updateRunningSyncJob(input.jobId, {});
+    } catch (error) {
+      console.error("Failed to refresh Sycamore async job heartbeat.", error);
+    }
+  };
+
+  const timer = setInterval(() => {
+    heartbeatWork = heartbeatWork.then(refreshHeartbeat);
+  }, input.intervalMs);
+  timer.unref?.();
+
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await heartbeatWork;
+    }
+  };
 }
 
 function addDays(isoDate: string, days: number): string {
@@ -1046,6 +1084,7 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
   actorEmail?: string;
   auditSink?: SycamoreAuditSink;
   runSync?: typeof runSycamoreDirectSync;
+  heartbeatIntervalMs?: number;
 }): Promise<RunNextSycamoreSyncJobResult> {
   const syncStore = input?.syncStore ?? createDefaultSyncStore();
   const jobStore = input?.jobStore ?? createDefaultJobStore();
@@ -1122,6 +1161,12 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
     })
   );
 
+  const runningHeartbeat = startRunningJobHeartbeat({
+    jobId: job.id,
+    jobStore,
+    intervalMs: input?.heartbeatIntervalMs ?? heartbeatIntervalMs()
+  });
+
   try {
     const result = await runSync({
       request: job.requestPayload,
@@ -1146,6 +1191,8 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
         });
       }
     });
+
+    await runningHeartbeat.stop();
 
     await jobStore.completeSyncJob(job.id, {
       syncLogId: result.syncLogId,
@@ -1201,6 +1248,7 @@ export async function runNextQueuedSycamoreSyncJob(input?: {
       executed: true
     };
   } catch (error) {
+    await runningHeartbeat.stop();
     const message = error instanceof Error ? error.message : "Unknown Sycamore async worker failure.";
     await jobStore.failSyncJob(job.id, {
       errorMessage: message
