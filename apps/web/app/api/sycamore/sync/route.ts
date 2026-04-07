@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentSession } from "@/lib/session";
 import { sycamoreDirectSyncRequestSchema } from "@/lib/sycamore-direct-sync";
-import { enqueueSycamoreSyncBatch, runNextQueuedSycamoreSyncJob } from "@/lib/sycamore-sync-jobs";
+import { enqueueSycamoreSyncBatch, type EnqueueSycamoreSyncBatchResult } from "@/lib/sycamore-sync-jobs";
 
 export const maxDuration = 300;
 
@@ -33,28 +33,40 @@ function statusCodeForError(message: string): number {
   return 400;
 }
 
+type QueueCronSycamoreSyncResult = {
+  status: number;
+  body: {
+    sycamoreSync: EnqueueSycamoreSyncBatchResult["batch"];
+    alreadyQueued: boolean;
+  };
+};
+
+export async function queueCronSycamoreSync(options?: {
+  enqueueBatch?: typeof enqueueSycamoreSyncBatch;
+}): Promise<QueueCronSycamoreSyncResult> {
+  const enqueueBatch = options?.enqueueBatch ?? enqueueSycamoreSyncBatch;
+  const queued = await enqueueBatch({
+    triggeredBy: "cron",
+    actorEmail: "system:cron"
+  });
+
+  return {
+    status: queued.alreadyQueued ? 200 : 202,
+    body: {
+      sycamoreSync: queued.batch,
+      alreadyQueued: queued.alreadyQueued
+    }
+  };
+}
+
 export async function GET(request: NextRequest) {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "Unauthorized cron request." }, { status: 401 });
   }
 
   try {
-    const queued = await enqueueSycamoreSyncBatch({
-      triggeredBy: "cron",
-      actorEmail: "system:cron"
-    });
-    const executed = await runNextQueuedSycamoreSyncJob({
-      actorEmail: "system:cron"
-    });
-    return NextResponse.json(
-      {
-        sycamoreSync: executed.batch ?? queued.batch,
-        alreadyQueued: queued.alreadyQueued,
-        executed: executed.executed,
-        jobId: executed.job?.id ?? null
-      },
-      { status: queued.alreadyQueued ? 200 : 202 }
-    );
+    const result = await queueCronSycamoreSync();
+    return NextResponse.json(result.body, { status: result.status });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Sycamore sync failure.";
     return NextResponse.json({ error: message }, { status: statusCodeForError(message) });
