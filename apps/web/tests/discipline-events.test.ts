@@ -179,6 +179,7 @@ test("listDisciplineEvents paginates through all Supabase discipline event rows"
   });
 
   const requestedRanges: Array<[number, number]> = [];
+  const orderCalls: Array<{ column: string; options?: Record<string, unknown> }> = [];
 
   const fakeClient = {
     from(table: "discipline_events") {
@@ -187,7 +188,8 @@ test("listDisciplineEvents paginates through all Supabase discipline event rows"
         select() {
           return this;
         },
-        order() {
+        order(column: string, options?: Record<string, unknown>) {
+          orderCalls.push({ column, options });
           return this;
         },
         eq() {
@@ -224,6 +226,11 @@ test("listDisciplineEvents paginates through all Supabase discipline event rows"
     assert.deepEqual(requestedRanges, [
       [0, 999],
       [1000, 1999]
+    ]);
+    assert.deepEqual(orderCalls.slice(0, 3), [
+      { column: "incident_date", options: { ascending: false, nullsFirst: false } },
+      { column: "source_priority", options: { ascending: true } },
+      { column: "event_key", options: { ascending: true } }
     ]);
     assert.equal(events[0]?.sourceRecordId, "source-1");
     assert.equal(events[1000]?.sourceRecordId, "source-1001");
