@@ -21,6 +21,10 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import {
+  editableCommunicationBandsFromPolicy,
+  type EditableCommunicationBand
+} from "@/lib/demerit-escalation";
 
 interface PolicyTemplate {
   label: string;
@@ -35,9 +39,11 @@ interface PolicyRow {
   warningOffsets: number[];
   milestones: number[];
   interventionTemplates: string;
+  communicationBands: string;
   createdBy: string;
   createdAt: string;
   parsedTemplates?: PolicyTemplate[];
+  parsedCommunicationBands?: EditableCommunicationBand[];
 }
 
 interface PolicyResponse {
@@ -78,6 +84,13 @@ function templatesFromPolicy(policy: PolicyRow | null): PolicyTemplate[] {
   return [emptyTemplate()];
 }
 
+function communicationBandsFromPolicy(policy: PolicyRow | null): EditableCommunicationBand[] {
+  if (policy?.parsedCommunicationBands?.length) {
+    return policy.parsedCommunicationBands;
+  }
+  return editableCommunicationBandsFromPolicy(policy ? { communicationBands: policy.communicationBands } : null);
+}
+
 export function PoliciesClient() {
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
   const [latest, setLatest] = useState<PolicyRow | null>(null);
@@ -85,6 +98,9 @@ export function PoliciesClient() {
   const [warningOffsets, setWarningOffsets] = useState<string[]>(["3", "1"]);
   const [milestones, setMilestones] = useState<string[]>(["0", "10", "20", "30"]);
   const [templates, setTemplates] = useState<PolicyTemplate[]>([emptyTemplate()]);
+  const [communicationBands, setCommunicationBands] = useState<EditableCommunicationBand[]>(
+    communicationBandsFromPolicy(null)
+  );
   const [queueNotifications, setQueueNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -114,6 +130,7 @@ export function PoliciesClient() {
   }, []);
 
   const currentTemplates = useMemo(() => templatesFromPolicy(latest), [latest]);
+  const currentCommunicationBands = useMemo(() => communicationBandsFromPolicy(latest), [latest]);
 
   function loadCurrentIntoForm() {
     if (!latest) {
@@ -123,6 +140,7 @@ export function PoliciesClient() {
     setWarningOffsets(latest.warningOffsets.map((value) => String(value)));
     setMilestones(latest.milestones.map((value) => String(value)));
     setTemplates(currentTemplates);
+    setCommunicationBands(currentCommunicationBands);
   }
 
   async function onCreatePolicy(event: FormEvent<HTMLFormElement>) {
@@ -140,6 +158,15 @@ export function PoliciesClient() {
         dueDays: Number(template.dueDays) || 0,
         assignedTo: template.assignedTo?.trim() ? template.assignedTo.trim() : null,
         notesTemplate: template.notesTemplate
+      })),
+      communicationBands: communicationBands.map((band) => ({
+        id: band.id,
+        label: band.label.trim(),
+        shortLabel: band.shortLabel.trim(),
+        parentCommunication: band.parentCommunication.trim(),
+        adminAction: band.adminAction.trim(),
+        adminMessage: band.adminMessage.trim(),
+        policyImpact: band.policyImpact.trim()
       }))
     };
 
@@ -216,6 +243,10 @@ export function PoliciesClient() {
           {error}
         </InlineAlert>
       ) : null}
+      <InlineAlert tone="info" title="Policy refresh uses app state.">
+        This workspace reloads the latest saved policy versions and evaluations from Signal storage. It does not trigger a
+        direct Sycamore pull when the page opens or refreshes.
+      </InlineAlert>
       {message ? (
         <InlineAlert tone="success" title="Policy engine updated.">
           {message}
@@ -254,10 +285,38 @@ export function PoliciesClient() {
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold text-[var(--color-ink)]">Intervention templates</p>
+                  <p className="font-semibold text-[var(--color-ink)]">Communication ladder</p>
                   <Button type="button" variant="ghost" size="sm" onClick={loadCurrentIntoForm}>
                     Load into form
                   </Button>
+                </div>
+                <div className="grid gap-3">
+                  {currentCommunicationBands.map((band) => (
+                    <SoftPanel key={band.id} className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-[var(--color-ink)]">{band.label}</p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-[var(--color-subtle)]">
+                            {band.shortLabel}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-[var(--color-muted)]">
+                        <span className="font-semibold text-[var(--color-ink)]">Parent:</span> {band.parentCommunication}
+                      </p>
+                      <p className="text-sm text-[var(--color-muted)]">
+                        <span className="font-semibold text-[var(--color-ink)]">Admin:</span> {band.adminAction}
+                      </p>
+                      <p className="text-sm text-[var(--color-muted)]">{band.adminMessage}</p>
+                      <p className="text-sm text-[var(--color-muted)]">{band.policyImpact}</p>
+                    </SoftPanel>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-semibold text-[var(--color-ink)]">Intervention templates</p>
                 </div>
                 <div className="grid gap-3">
                   {currentTemplates.map((template, index) => (
@@ -389,6 +448,113 @@ export function PoliciesClient() {
             </div>
 
             <div className="space-y-4">
+              <div className="space-y-4">
+                <div>
+                  <p className="font-semibold text-[var(--color-ink)]">Communication ladder</p>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">
+                    These three handbook bands drive the messaging shown in the dashboard ladder. The point ranges stay
+                    fixed; edit the labels and guidance here instead of changing code.
+                  </p>
+                </div>
+
+                {communicationBands.map((band, index) => (
+                  <SoftPanel key={band.id} className="space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-[var(--color-ink)]">{band.id.replaceAll("_", " ")}</p>
+                        <p className="mt-1 text-xs uppercase tracking-[0.18em] text-[var(--color-subtle)]">
+                          Dashboard ladder band
+                        </p>
+                      </div>
+                      <StatusBadge tone={index === 0 ? "info" : index === 1 ? "warning" : "danger"}>
+                        {band.shortLabel}
+                      </StatusBadge>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="Band label">
+                        <Input
+                          value={band.label}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, label: event.currentTarget.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                      <Field label="Short label">
+                        <Input
+                          value={band.shortLabel}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, shortLabel: event.currentTarget.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                      <Field label="Parent communication" className="md:col-span-2">
+                        <Textarea
+                          rows={3}
+                          value={band.parentCommunication}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index
+                                  ? { ...current, parentCommunication: event.currentTarget.value }
+                                  : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                      <Field label="Admin action" className="md:col-span-2">
+                        <Textarea
+                          rows={3}
+                          value={band.adminAction}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, adminAction: event.currentTarget.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                      <Field label="Admin note" className="md:col-span-2">
+                        <Textarea
+                          rows={3}
+                          value={band.adminMessage}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, adminMessage: event.currentTarget.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                      <Field label="Policy impact" className="md:col-span-2">
+                        <Textarea
+                          rows={3}
+                          value={band.policyImpact}
+                          onChange={(event) =>
+                            setCommunicationBands((previous) =>
+                              previous.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, policyImpact: event.currentTarget.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </Field>
+                    </div>
+                  </SoftPanel>
+                ))}
+              </div>
+
               <div className="flex items-center justify-between gap-3">
                 <p className="font-semibold text-[var(--color-ink)]">Intervention templates</p>
                 <Button
@@ -500,6 +666,7 @@ export function PoliciesClient() {
                     <th className={tableHeadCellClassName}>Base X</th>
                     <th className={tableHeadCellClassName}>Warnings</th>
                     <th className={tableHeadCellClassName}>Milestones</th>
+                    <th className={tableHeadCellClassName}>Ladder copy</th>
                     <th className={tableHeadCellClassName}>Created</th>
                     <th className={tableHeadCellClassName}>By</th>
                   </tr>
@@ -513,6 +680,11 @@ export function PoliciesClient() {
                       <td className={tableCellClassName}>{policy.baseThreshold}</td>
                       <td className={tableCellClassName}>{policy.warningOffsets.join(", ")}</td>
                       <td className={tableCellClassName}>{policy.milestones.join(", ")}</td>
+                      <td className={tableCellClassName}>
+                        {communicationBandsFromPolicy(policy)
+                          .map((band) => band.shortLabel)
+                          .join(", ")}
+                      </td>
                       <td className={tableCellClassName}>{new Date(policy.createdAt).toLocaleString()}</td>
                       <td className={tableCellClassName}>{policy.createdBy}</td>
                     </tr>

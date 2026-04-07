@@ -5,6 +5,7 @@ import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipli
 import {
   demeritEscalationBands,
   getDemeritEscalationBand,
+  resolveDemeritEscalationBands,
   type DemeritEscalationBandId
 } from "@/lib/demerit-escalation";
 import { parseRunStatusSummary } from "@/lib/policies";
@@ -225,16 +226,19 @@ export async function buildDashboardSnapshot(
   storage: StorageRepositories,
   filters: DashboardFilters
 ): Promise<DashboardSnapshot> {
-  const [parseRuns, interventions, notifications, students, disciplineEvents, guardianContactsResult] = await Promise.all([
-    storage.parseRuns.list(),
-    storage.interventions.list(),
-    storage.notifications.list(),
-    storage.students.list(),
-    listDisciplineEvents(storage),
-    listGuardianContactsForDashboard(storage)
-  ]);
+  const [parseRuns, interventions, notifications, students, disciplineEvents, guardianContactsResult, latestPolicy] =
+    await Promise.all([
+      storage.parseRuns.list(),
+      storage.interventions.list(),
+      storage.notifications.list(),
+      storage.students.list(),
+      listDisciplineEvents(storage),
+      listGuardianContactsForDashboard(storage),
+      storage.policies.getLatest()
+    ]);
   const guardianContacts = guardianContactsResult.contacts;
   const guardianContactsUnavailable = guardianContactsResult.unavailable;
+  const ladderBands = resolveDemeritEscalationBands(latestPolicy);
 
   const normalizedFilters = {
     grade: normalizeFilterValue(filters.grade),
@@ -360,7 +364,7 @@ export async function buildDashboardSnapshot(
   const bandCountsMap = new Map<DemeritEscalationBandId, number>();
   const actionQueue = [...studentAggregates.values()]
     .map((student) => {
-      const band = getDemeritEscalationBand(student.totalPoints);
+      const band = getDemeritEscalationBand(student.totalPoints, ladderBands);
       bandCountsMap.set(band.id, (bandCountsMap.get(band.id) ?? 0) + 1);
       return {
         studentId: student.studentId,
@@ -380,8 +384,8 @@ export async function buildDashboardSnapshot(
     })
     .filter((student) => student.currentBandId !== "below_10")
     .sort((left, right) => {
-      const leftBand = getDemeritEscalationBand(left.totalPoints);
-      const rightBand = getDemeritEscalationBand(right.totalPoints);
+      const leftBand = getDemeritEscalationBand(left.totalPoints, ladderBands);
+      const rightBand = getDemeritEscalationBand(right.totalPoints, ladderBands);
       if (rightBand.priority !== leftBand.priority) {
         return rightBand.priority - leftBand.priority;
       }
@@ -466,16 +470,17 @@ export async function buildDashboardSnapshot(
         criticalCount: 0
       };
     row.studentCount += 1;
-    if (aggregate.totalPoints >= 10) {
+    const band = getDemeritEscalationBand(aggregate.totalPoints, ladderBands);
+    if (band.id !== "below_10") {
       row.escalatedCount += 1;
     }
-    if (aggregate.totalPoints >= 40) {
+    if (band.id === "points_40_plus") {
       row.criticalCount += 1;
     }
     gradePressureMap.set(aggregate.grade, row);
   }
 
-  const bandCounts = demeritEscalationBands
+  const bandCounts = ladderBands
     .filter((band) => band.id !== "below_10")
     .map((band) => ({
       id: band.id,
@@ -523,8 +528,12 @@ export async function buildDashboardSnapshot(
       studentsTracked: studentAggregates.size,
       incidentsTracked: filteredEvents.length,
       totalPoints: filteredEvents.reduce((sum, event) => sum + event.points, 0),
-      studentsAt10Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 10).length,
-      studentsAt40Plus: [...studentAggregates.values()].filter((student) => student.totalPoints >= 40).length,
+      studentsAt10Plus: [...studentAggregates.values()].filter(
+        (student) => getDemeritEscalationBand(student.totalPoints, ladderBands).id !== "below_10"
+      ).length,
+      studentsAt40Plus: [...studentAggregates.values()].filter(
+        (student) => getDemeritEscalationBand(student.totalPoints, ladderBands).id === "points_40_plus"
+      ).length,
       openInterventions: Object.entries(interventionCounts)
         .filter(([status]) => ["open", "in_progress", "overdue"].includes(status))
         .reduce((sum, [, count]) => sum + count, 0),

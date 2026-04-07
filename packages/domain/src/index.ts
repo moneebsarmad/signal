@@ -179,6 +179,7 @@ export const policySchema = z.object({
   warningOffsets: z.array(z.number().int()),
   milestones: z.array(z.number().int()),
   interventionTemplates: z.string(),
+  communicationBands: z.string().default("[]"),
   createdBy: z.string().min(1),
   createdAt: isoDateSchema
 });

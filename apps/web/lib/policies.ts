@@ -4,6 +4,10 @@ import type { AuditEvent, Intervention, ParseRun, Policy, Student } from "@syc/d
 import type { StorageRepositories } from "@syc/storage";
 import { z } from "zod";
 
+import {
+  normalizeEditableCommunicationBands,
+  type EditableCommunicationBand
+} from "@/lib/demerit-escalation";
 import { listDisciplineEvents } from "@/lib/discipline-events";
 
 export const policyInputSchema = z.object({
@@ -17,6 +21,19 @@ export const policyInputSchema = z.object({
         dueDays: z.number().int().positive().default(7),
         assignedTo: z.string().nullable().optional(),
         notesTemplate: z.string().default("")
+      })
+    )
+    .default([]),
+  communicationBands: z
+    .array(
+      z.object({
+        id: z.enum(["points_10_19", "points_20_39", "points_40_plus"]),
+        label: z.string().min(1),
+        shortLabel: z.string().min(1),
+        parentCommunication: z.string().min(1),
+        adminAction: z.string().min(1),
+        adminMessage: z.string().min(1),
+        policyImpact: z.string().min(1)
       })
     )
     .default([])
@@ -70,6 +87,7 @@ export async function createPolicyVersion(input: {
     warningOffsets: normalized.warningOffsets,
     milestones: normalized.milestones,
     interventionTemplates: JSON.stringify(normalized.interventionTemplates),
+    communicationBands: JSON.stringify(normalized.communicationBands),
     createdBy: actorEmail,
     createdAt: now
   };
@@ -352,12 +370,14 @@ export function normalizePolicyInput(input: PolicyInput): PolicyInput {
     notesTemplate: template.notesTemplate.trim(),
     assignedTo: template.assignedTo?.trim() || null
   }));
+  const communicationBands: EditableCommunicationBand[] = normalizeEditableCommunicationBands(input.communicationBands);
 
   return {
     baseThreshold: input.baseThreshold,
     warningOffsets,
     milestones,
-    interventionTemplates: templates
+    interventionTemplates: templates,
+    communicationBands
   };
 }
 

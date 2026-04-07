@@ -97,6 +97,7 @@ function samplePolicy(overrides: Partial<Policy> = {}): Policy {
     warningOffsets: [-3, -1],
     milestones: [10, 15, 20],
     interventionTemplates: "{\"10\":\"call-home\"}",
+    communicationBands: "[]",
     createdBy: "admin@school.org",
     createdAt: "2026-02-12T00:00:00Z",
     ...overrides

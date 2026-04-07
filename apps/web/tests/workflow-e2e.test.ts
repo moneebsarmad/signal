@@ -75,19 +75,20 @@ test("upload -> review -> policy -> notify -> intervention complete flow", async
   await createPolicyVersion({
     storage,
     actorEmail: "admin@school.org",
-    payload: {
-      baseThreshold: 10,
-      warningOffsets: [-3, -1],
-      milestones: [0, 10, 20],
-      interventionTemplates: [
-        { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
-        { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
-        { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" },
-        { label: "X+10", dueDays: 7, assignedTo: "Dean", notesTemplate: "Escalated threshold" },
-        { label: "X+20", dueDays: 7, assignedTo: "Dean", notesTemplate: "Severe threshold" }
-      ]
-    }
-  });
+      payload: {
+        baseThreshold: 10,
+        warningOffsets: [-3, -1],
+        milestones: [0, 10, 20],
+        interventionTemplates: [
+          { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
+          { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
+          { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" },
+          { label: "X+10", dueDays: 7, assignedTo: "Dean", notesTemplate: "Escalated threshold" },
+          { label: "X+20", dueDays: 7, assignedTo: "Dean", notesTemplate: "Severe threshold" }
+        ],
+        communicationBands: []
+      }
+    });
 
   const evaluation = await evaluatePolicyAndInterventions({
     storage,
@@ -164,17 +165,18 @@ test("review approval automatically evaluates policy and queues notifications", 
   await createPolicyVersion({
     storage,
     actorEmail: "admin@school.org",
-    payload: {
-      baseThreshold: 10,
-      warningOffsets: [-3, -1],
-      milestones: [0, 10, 20],
-      interventionTemplates: [
-        { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
-        { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
-        { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" }
-      ]
-    }
-  });
+      payload: {
+        baseThreshold: 10,
+        warningOffsets: [-3, -1],
+        milestones: [0, 10, 20],
+        interventionTemplates: [
+          { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
+          { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
+          { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" }
+        ],
+        communicationBands: []
+      }
+    });
 
   const ingestion = await processIngestionUpload({
     storage,
@@ -261,7 +263,8 @@ test("bulk review approval runs downstream automation once after the batch", asy
         { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
         { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
         { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" }
-      ]
+      ],
+      communicationBands: []
     }
   });
 

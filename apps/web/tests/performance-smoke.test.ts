@@ -56,7 +56,8 @@ test.skip("performance smoke: upload-to-policy-evaluation stays within MVP SLA o
       baseThreshold: 10,
       warningOffsets: [-3, -1],
       milestones: [0, 10, 20],
-      interventionTemplates: []
+      interventionTemplates: [],
+      communicationBands: []
     }
   });
   const evaluation = await evaluatePolicyAndInterventions({

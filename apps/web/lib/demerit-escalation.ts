@@ -1,8 +1,9 @@
+import type { Policy } from "@syc/domain";
+
 export type DemeritEscalationBandId =
   | "below_10"
   | "points_10_19"
-  | "points_20_29"
-  | "points_35_39"
+  | "points_20_39"
   | "points_40_plus";
 
 export interface DemeritEscalationBand {
@@ -19,11 +20,21 @@ export interface DemeritEscalationBand {
   policyImpact: string;
 }
 
+export interface EditableCommunicationBand {
+  id: Exclude<DemeritEscalationBandId, "below_10">;
+  label: string;
+  shortLabel: string;
+  parentCommunication: string;
+  adminAction: string;
+  adminMessage: string;
+  policyImpact: string;
+}
+
 export const demeritEscalationBands: DemeritEscalationBand[] = [
   {
     id: "below_10",
-    label: "Below 10 points",
-    shortLabel: "Below 10",
+    label: "0 to 9 points",
+    shortLabel: "0-9",
     minPoints: 0,
     maxPoints: 9,
     tone: "neutral",
@@ -49,11 +60,11 @@ export const demeritEscalationBands: DemeritEscalationBand[] = [
       "Student may be at risk for programs tied to demerit points, including Dual Credit, club roles, participation, and athletics scholarship eligibility."
   },
   {
-    id: "points_20_29",
-    label: "20 to 34 points",
-    shortLabel: "20-34",
+    id: "points_20_39",
+    label: "20 to 39 points",
+    shortLabel: "20-39",
     minPoints: 20,
-    maxPoints: 34,
+    maxPoints: 39,
     tone: "warning",
     priority: 2,
     parentCommunication: "Parents should meet with BHA administration.",
@@ -64,23 +75,8 @@ export const demeritEscalationBands: DemeritEscalationBand[] = [
       "Student should be advised to attend counseling with Behavior and/or Academic Counselors."
   },
   {
-    id: "points_35_39",
-    label: "35 to 39 points",
-    shortLabel: "35-39",
-    minPoints: 35,
-    maxPoints: 39,
-    tone: "danger",
-    priority: 3,
-    parentCommunication: "Parents should meet with administration for a severity review.",
-    adminAction: "Obtain signed acknowledgement, document the case in Sycamore, and prepare the 5-day OSS response.",
-    adminMessage:
-      "Explain that reaching 40+ points may require un-enrollment, secure parent sign-off, and document the full action trail.",
-    policyImpact:
-      "Students are placed at risk for enrollment and probation during re-enrollment, and the handbook calls for automatic 5-day out-of-school suspension."
-  },
-  {
     id: "points_40_plus",
-    label: "40 or more points",
+    label: "40+ points",
     shortLabel: "40+",
     minPoints: 40,
     maxPoints: null,
@@ -95,10 +91,138 @@ export const demeritEscalationBands: DemeritEscalationBand[] = [
   }
 ];
 
-export function getDemeritEscalationBand(totalPoints: number): DemeritEscalationBand {
+const editableBandIds = new Set<EditableCommunicationBand["id"]>([
+  "points_10_19",
+  "points_20_39",
+  "points_40_plus"
+]);
+
+export function editableCommunicationBandsFromBands(
+  bands: DemeritEscalationBand[] = demeritEscalationBands
+): EditableCommunicationBand[] {
+  return bands
+    .filter((band): band is DemeritEscalationBand & { id: EditableCommunicationBand["id"] } => band.id !== "below_10")
+    .map((band) => ({
+      id: band.id,
+      label: band.label,
+      shortLabel: band.shortLabel,
+      parentCommunication: band.parentCommunication,
+      adminAction: band.adminAction,
+      adminMessage: band.adminMessage,
+      policyImpact: band.policyImpact
+    }));
+}
+
+export function editableCommunicationBandsFromPolicy(policy: Pick<Policy, "communicationBands"> | null | undefined) {
+  return editableCommunicationBandsFromBands(resolveDemeritEscalationBands(policy));
+}
+
+export function normalizeEditableCommunicationBands(
+  overrides: EditableCommunicationBand[] | null | undefined
+): EditableCommunicationBand[] {
+  const defaultsById = new Map(
+    editableCommunicationBandsFromBands().map((band) => [band.id, band] as const)
+  );
+  const overridesById = new Map<EditableCommunicationBand["id"], EditableCommunicationBand>();
+
+  for (const candidate of overrides ?? []) {
+    if (!candidate || !editableBandIds.has(candidate.id)) {
+      continue;
+    }
+    const fallback = defaultsById.get(candidate.id);
+    if (!fallback) {
+      continue;
+    }
+    overridesById.set(candidate.id, {
+      id: candidate.id,
+      label: candidate.label.trim() || fallback.label,
+      shortLabel: candidate.shortLabel.trim() || fallback.shortLabel,
+      parentCommunication: candidate.parentCommunication.trim() || fallback.parentCommunication,
+      adminAction: candidate.adminAction.trim() || fallback.adminAction,
+      adminMessage: candidate.adminMessage.trim() || fallback.adminMessage,
+      policyImpact: candidate.policyImpact.trim() || fallback.policyImpact
+    });
+  }
+
+  return editableCommunicationBandsFromBands().map((band) => overridesById.get(band.id) ?? band);
+}
+
+function parseEditableCommunicationBands(source: string | null | undefined): EditableCommunicationBand[] | null {
+  if (!source?.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const candidates = parsed
+      .filter((item): item is EditableCommunicationBand => {
+        if (!item || typeof item !== "object") {
+          return false;
+        }
+        const value = item as Partial<EditableCommunicationBand>;
+        return (
+          typeof value.id === "string" &&
+          editableBandIds.has(value.id as EditableCommunicationBand["id"]) &&
+          typeof value.label === "string" &&
+          typeof value.shortLabel === "string" &&
+          typeof value.parentCommunication === "string" &&
+          typeof value.adminAction === "string" &&
+          typeof value.adminMessage === "string" &&
+          typeof value.policyImpact === "string"
+        );
+      })
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        shortLabel: item.shortLabel,
+        parentCommunication: item.parentCommunication,
+        adminAction: item.adminAction,
+        adminMessage: item.adminMessage,
+        policyImpact: item.policyImpact
+      }));
+
+    return candidates.length > 0 ? normalizeEditableCommunicationBands(candidates) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveDemeritEscalationBands(
+  policy: Pick<Policy, "communicationBands"> | null | undefined
+): DemeritEscalationBand[] {
+  const overrides = new Map(
+    (parseEditableCommunicationBands(policy?.communicationBands) ?? []).map((band) => [band.id, band] as const)
+  );
+
+  return demeritEscalationBands.map((band) => {
+    if (band.id === "below_10") {
+      return band;
+    }
+    const override = overrides.get(band.id);
+    if (!override) {
+      return band;
+    }
+    return {
+      ...band,
+      label: override.label,
+      shortLabel: override.shortLabel,
+      parentCommunication: override.parentCommunication,
+      adminAction: override.adminAction,
+      adminMessage: override.adminMessage,
+      policyImpact: override.policyImpact
+    };
+  });
+}
+
+export function getDemeritEscalationBand(
+  totalPoints: number,
+  bands: DemeritEscalationBand[] = demeritEscalationBands
+): DemeritEscalationBand {
   const normalizedPoints = Number.isFinite(totalPoints) ? Math.max(0, Math.trunc(totalPoints)) : 0;
   return (
-    demeritEscalationBands.find((band) => {
+    bands.find((band) => {
       if (normalizedPoints < band.minPoints) {
         return false;
       }
@@ -106,12 +230,14 @@ export function getDemeritEscalationBand(totalPoints: number): DemeritEscalation
         return false;
       }
       return true;
-    }) ?? demeritEscalationBands[0]!
+    }) ?? bands[0]!
   );
 }
 
-export function escalationBandOptions(): Array<{ id: string; label: string }> {
-  return demeritEscalationBands.map((band) => ({
+export function escalationBandOptions(
+  bands: DemeritEscalationBand[] = demeritEscalationBands
+): Array<{ id: string; label: string }> {
+  return bands.map((band) => ({
     id: band.id,
     label: band.label
   }));

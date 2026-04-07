@@ -425,6 +425,7 @@ function createDefinitions() {
         warningOffsets: numberArrayCell(row, "warning_offsets"),
         milestones: numberArrayCell(row, "milestones"),
         interventionTemplates: cell(row, "intervention_templates"),
+        communicationBands: cell(row, "communication_bands") || "[]",
         createdBy: cell(row, "created_by"),
         createdAt: cell(row, "created_at")
       }),
@@ -434,6 +435,7 @@ function createDefinitions() {
       warning_offsets: value.warningOffsets,
       milestones: value.milestones,
       intervention_templates: value.interventionTemplates,
+      communication_bands: value.communicationBands,
       created_by: value.createdBy,
       created_at: value.createdAt
     })

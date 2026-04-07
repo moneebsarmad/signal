@@ -19,6 +19,7 @@ function seedPolicy(): Policy {
       { label: "X+10", dueDays: 7, assignedTo: "Principal", notesTemplate: "Escalated threshold" },
       { label: "X+20", dueDays: 5, assignedTo: "Principal", notesTemplate: "Severe threshold" }
     ]),
+    communicationBands: "[]",
     createdBy: "admin@school.org",
     createdAt: "2026-02-12T00:00:00.000Z"
   };
