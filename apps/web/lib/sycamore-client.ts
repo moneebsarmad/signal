@@ -86,6 +86,14 @@ function buildStudentsPath(config: SycamoreClientConfig): string {
   );
 }
 
+function buildFamiliesPath(config: SycamoreClientConfig): string {
+  return `/School/${encodeURIComponent(config.schoolId)}/Families`;
+}
+
+function buildContactsPath(config: SycamoreClientConfig): string {
+  return `/School/${encodeURIComponent(config.schoolId)}/Contacts`;
+}
+
 function buildDisciplineUrl(config: SycamoreClientConfig, date: string): string {
   const url = new URL(`${trimTrailingSlash(config.baseUrl)}${buildDisciplinePath(config)}`);
   url.searchParams.set("Date", date);
@@ -94,6 +102,14 @@ function buildDisciplineUrl(config: SycamoreClientConfig, date: string): string 
 
 function buildStudentsUrl(config: SycamoreClientConfig): string {
   return new URL(`${trimTrailingSlash(config.baseUrl)}${buildStudentsPath(config)}`).toString();
+}
+
+function buildFamiliesUrl(config: SycamoreClientConfig): string {
+  return new URL(`${trimTrailingSlash(config.baseUrl)}${buildFamiliesPath(config)}`).toString();
+}
+
+function buildContactsUrl(config: SycamoreClientConfig): string {
+  return new URL(`${trimTrailingSlash(config.baseUrl)}${buildContactsPath(config)}`).toString();
 }
 
 function buildStudentDisciplineLogUrl(
@@ -292,6 +308,24 @@ export async function fetchSycamoreStudents(
   dependencies: SycamoreClientDependencies = {}
 ): Promise<Array<Record<string, unknown>>> {
   const response = await fetchResponseWithRetry(buildStudentsUrl(config), config, dependencies);
+  const payload = await parseJsonResponse(response);
+  return extractDataArray(payload);
+}
+
+export async function fetchSycamoreFamilies(
+  config: SycamoreClientConfig,
+  dependencies: SycamoreClientDependencies = {}
+): Promise<Array<Record<string, unknown>>> {
+  const response = await fetchResponseWithRetry(buildFamiliesUrl(config), config, dependencies);
+  const payload = await parseJsonResponse(response);
+  return extractDataArray(payload);
+}
+
+export async function fetchSycamoreContacts(
+  config: SycamoreClientConfig,
+  dependencies: SycamoreClientDependencies = {}
+): Promise<Array<Record<string, unknown>>> {
+  const response = await fetchResponseWithRetry(buildContactsUrl(config), config, dependencies);
   const payload = await parseJsonResponse(response);
   return extractDataArray(payload);
 }

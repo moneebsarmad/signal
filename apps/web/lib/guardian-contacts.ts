@@ -3,15 +3,23 @@ import { randomUUID } from "node:crypto";
 import type { AuditEvent, GuardianContact, Student } from "@syc/domain";
 import type { StorageRepositories } from "@syc/storage";
 
-import { fetchSycamoreStudents, getSycamoreClientConfigFromEnv, type SycamoreClientDependencies } from "@/lib/sycamore-client";
+import {
+  fetchSycamoreContacts,
+  fetchSycamoreFamilies,
+  fetchSycamoreStudents,
+  getSycamoreClientConfigFromEnv,
+  type SycamoreClientDependencies
+} from "@/lib/sycamore-client";
 import { normalizeSycamoreStudentRecords } from "@/lib/sycamore-normalizer";
 import { upsertRosterStudent } from "@/lib/student-identity";
 
 interface ContactCandidate {
-  email: string;
+  email: string | null;
+  phone: string | null;
   guardianName: string | null;
   relationship: string | null;
   isPrimary: boolean;
+  sourceRecordId: string | null;
 }
 
 export interface GuardianContactImportSummary {
@@ -66,6 +74,9 @@ const ROSTER_CONTACT_GROUPS = [
   }
 ] as const;
 
+const SYCAMORE_FAMILY_ID_KEYS = ["FamilyID", "FamilyId", "familyId"] as const;
+const SYCAMORE_SECONDARY_FAMILY_ID_KEYS = ["Family2ID", "Family2Id", "family2Id"] as const;
+
 function pickFirst(source: Record<string, unknown>, keys: readonly string[]): unknown {
   for (const key of keys) {
     if (key in source) {
@@ -97,6 +108,11 @@ function normalizeEmail(value: string | null): string | null {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ? trimmed : null;
 }
 
+function normalizePhone(value: string | null): string | null {
+  const trimmed = value?.trim() || "";
+  return trimmed ? trimmed : null;
+}
+
 function parseBoolean(value: string | null, fallback: boolean): boolean {
   if (!value) {
     return fallback;
@@ -115,8 +131,24 @@ function normalizeLookup(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function stableGuardianContactId(studentId: string, email: string, relationship: string | null): string {
-  const seed = `${normalizeLookup(studentId)}|${normalizeLookup(email)}|${normalizeLookup(relationship ?? "")}`;
+function normalizePhoneSeed(phone: string | null): string {
+  if (!phone) {
+    return "";
+  }
+  const digits = phone.replace(/\D+/g, "");
+  return digits || normalizeLookup(phone);
+}
+
+function stableGuardianContactId(studentId: string, contact: ContactCandidate): string {
+  const identity =
+    contact.sourceRecordId?.trim() ||
+    contact.email?.trim() ||
+    normalizePhoneSeed(contact.phone) ||
+    contact.guardianName?.trim() ||
+    contact.relationship?.trim() ||
+    "unknown";
+  const relationship = contact.sourceRecordId ? "" : contact.relationship ?? "";
+  const seed = `${normalizeLookup(studentId)}|${normalizeLookup(identity)}|${normalizeLookup(relationship)}`;
   let hash = 5381;
   for (let index = 0; index < seed.length; index += 1) {
     hash = (hash * 33) ^ seed.charCodeAt(index);
@@ -153,14 +185,149 @@ function extractGuardianCandidates(record: Record<string, unknown>): ContactCand
 
     found.push({
       email,
+      phone: null,
       guardianName: trimText(pickFirst(record, group.nameKeys)),
       relationship: group.relationship,
-      isPrimary: group.isPrimary
+      isPrimary: group.isPrimary,
+      sourceRecordId: null
     });
     seen.add(email);
   }
 
   return found;
+}
+
+function normalizeFamilyId(value: unknown): string | null {
+  const familyId = trimText(value);
+  if (!familyId || familyId === "0") {
+    return null;
+  }
+  return familyId;
+}
+
+function rosterFamilyIds(record: Record<string, unknown>): string[] {
+  const ids = new Set<string>();
+  for (const key of [...SYCAMORE_FAMILY_ID_KEYS, ...SYCAMORE_SECONDARY_FAMILY_ID_KEYS]) {
+    const familyId = normalizeFamilyId(record[key]);
+    if (familyId) {
+      ids.add(familyId);
+    }
+  }
+  return [...ids];
+}
+
+function sycamoreContactName(record: Record<string, unknown>): string | null {
+  const firstName = trimText(pickFirst(record, ["FirstName", "firstName"]));
+  const lastName = trimText(pickFirst(record, ["LastName", "lastName"]));
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  return fullName || trimText(pickFirst(record, ["NickName", "nickName", "Nickname"])) || null;
+}
+
+function rankContactCandidate(candidate: ContactCandidate): number {
+  return Number(Boolean(candidate.email)) * 4 + Number(Boolean(candidate.phone)) * 2 + Number(Boolean(candidate.guardianName));
+}
+
+function dedupeCandidates(candidates: ContactCandidate[]): ContactCandidate[] {
+  const deduped: ContactCandidate[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key =
+      candidate.sourceRecordId?.trim() ||
+      candidate.email?.trim() ||
+      normalizePhoneSeed(candidate.phone) ||
+      candidate.guardianName?.trim() ||
+      "unknown";
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function orderCandidates(candidates: ContactCandidate[]): ContactCandidate[] {
+  const ordered = [...candidates].sort((left, right) => {
+    const scoreDelta = rankContactCandidate(right) - rankContactCandidate(left);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    return (left.guardianName ?? "").localeCompare(right.guardianName ?? "") || (left.sourceRecordId ?? "").localeCompare(right.sourceRecordId ?? "");
+  });
+
+  return ordered.map((candidate, index) => ({
+    ...candidate,
+    isPrimary: index === 0
+  }));
+}
+
+function buildContactsByFamilyId(contactRecords: Array<Record<string, unknown>>, familyNames: Map<string, string | null>) {
+  const contactsByFamilyId = new Map<string, ContactCandidate[]>();
+  for (const record of contactRecords) {
+    const familyId = normalizeFamilyId(pickFirst(record, [...SYCAMORE_FAMILY_ID_KEYS]));
+    if (!familyId) {
+      continue;
+    }
+
+    const candidate: ContactCandidate = {
+      email: normalizeEmail(trimText(pickFirst(record, ["Email", "email"]))),
+      phone: normalizePhone(trimText(pickFirst(record, ["Cell", "cell", "HomePhone", "homePhone", "WorkPhone", "workPhone"]))),
+      guardianName: sycamoreContactName(record) ?? familyNames.get(familyId) ?? null,
+      relationship: null,
+      isPrimary: false,
+      sourceRecordId: trimText(pickFirst(record, ["ID", "Id", "id"])) ? `contact:${trimText(pickFirst(record, ["ID", "Id", "id"]))}` : `family:${familyId}`
+    };
+
+    if (!candidate.email && !candidate.phone) {
+      continue;
+    }
+
+    const existing = contactsByFamilyId.get(familyId) ?? [];
+    existing.push(candidate);
+    contactsByFamilyId.set(familyId, existing);
+  }
+
+  for (const [familyId, candidates] of contactsByFamilyId) {
+    contactsByFamilyId.set(familyId, orderCandidates(dedupeCandidates(candidates)));
+  }
+
+  return contactsByFamilyId;
+}
+
+function buildFamilyFallbacks(familyRecords: Array<Record<string, unknown>>) {
+  const familyNames = new Map<string, string | null>();
+  const familyFallbacks = new Map<string, ContactCandidate[]>();
+
+  for (const record of familyRecords) {
+    const familyId = normalizeFamilyId(pickFirst(record, ["ID", "Id", "id"]));
+    if (!familyId) {
+      continue;
+    }
+
+    const familyName = trimText(pickFirst(record, ["Name", "name"]));
+    familyNames.set(familyId, familyName);
+
+    const phone = normalizePhone(trimText(pickFirst(record, ["HomePhone", "homePhone"])));
+    if (!phone) {
+      continue;
+    }
+
+    familyFallbacks.set(familyId, [
+      {
+        email: null,
+        phone,
+        guardianName: familyName,
+        relationship: "Family contact",
+        isPrimary: true,
+        sourceRecordId: `family:${familyId}`
+      }
+    ]);
+  }
+
+  return {
+    familyNames,
+    familyFallbacks
+  };
 }
 
 async function upsertGuardianContact(
@@ -172,15 +339,15 @@ async function upsertGuardianContact(
   notes: string,
   nowIso: string
 ): Promise<GuardianContact> {
-  const id = stableGuardianContactId(student.id, contact.email, contact.relationship);
+  const id = stableGuardianContactId(student.id, contact);
   const existing = await storage.guardianContacts.getById(id);
   const next: GuardianContact = {
     id,
     studentId: student.id,
     guardianName: contact.guardianName ?? existing?.guardianName ?? null,
     relationship: contact.relationship ?? existing?.relationship ?? null,
-    email: contact.email,
-    phone: existing?.phone ?? null,
+    email: contact.email ?? existing?.email ?? null,
+    phone: contact.phone ?? existing?.phone ?? null,
     isPrimary: contact.isPrimary || existing?.isPrimary || false,
     allowEmail: existing?.allowEmail ?? true,
     sourceType,
@@ -297,9 +464,11 @@ export async function importGuardianContactsCsv(input: {
       student,
       {
         email,
+        phone: null,
         guardianName: row.guardian_name?.trim() || null,
         relationship: row.relationship?.trim() || null,
-        isPrimary: parseBoolean(row.is_primary?.trim() || null, false)
+        isPrimary: parseBoolean(row.is_primary?.trim() || null, false),
+        sourceRecordId: null
       },
       "csv_import",
       null,
@@ -336,6 +505,8 @@ export async function syncGuardianContactsFromSycamore(input: {
   const config = getSycamoreClientConfigFromEnv();
   const nowIso = new Date().toISOString();
   const rosterRecords = await fetchSycamoreStudents(config, input.dependencies);
+  let familyRecords: Array<Record<string, unknown>> = [];
+  let contactRecords: Array<Record<string, unknown>> = [];
   const normalizedStudents = normalizeSycamoreStudentRecords(rosterRecords, nowIso);
 
   const studentByExternalId = new Map<string, Student>();
@@ -351,6 +522,23 @@ export async function syncGuardianContactsFromSycamore(input: {
   let contactsUpserted = 0;
   const warnings = [...normalizedStudents.warnings];
 
+  try {
+    familyRecords = await fetchSycamoreFamilies(config, input.dependencies);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown Sycamore family sync failure.";
+    warnings.push(`sycamore_family_sync_failed:${message}`);
+  }
+
+  try {
+    contactRecords = await fetchSycamoreContacts(config, input.dependencies);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown Sycamore contact sync failure.";
+    warnings.push(`sycamore_contact_sync_failed:${message}`);
+  }
+
+  const { familyNames, familyFallbacks } = buildFamilyFallbacks(familyRecords);
+  const contactsByFamilyId = buildContactsByFamilyId(contactRecords, familyNames);
+
   for (const record of rosterRecords) {
     const externalStudentId =
       trimText(pickFirst(record, ["ID", "Id", "id", "StudentID", "StudentId"])) ?? null;
@@ -363,18 +551,31 @@ export async function syncGuardianContactsFromSycamore(input: {
       continue;
     }
 
-    const candidates = extractGuardianCandidates(record);
+    const candidates: ContactCandidate[] = [];
+    for (const familyId of rosterFamilyIds(record)) {
+      candidates.push(...(contactsByFamilyId.get(familyId) ?? []));
+    }
     if (candidates.length === 0) {
+      for (const familyId of rosterFamilyIds(record)) {
+        candidates.push(...(familyFallbacks.get(familyId) ?? []));
+      }
+    }
+    if (candidates.length === 0) {
+      candidates.push(...extractGuardianCandidates(record));
+    }
+
+    const orderedCandidates = orderCandidates(dedupeCandidates(candidates));
+    if (orderedCandidates.length === 0) {
       continue;
     }
 
-    for (const candidate of candidates) {
+    for (const candidate of orderedCandidates) {
       const contact = await upsertGuardianContact(
         input.storage,
         student,
         candidate,
         "sycamore_roster",
-        externalStudentId,
+        candidate.sourceRecordId ?? externalStudentId,
         "",
         nowIso
       );
@@ -387,7 +588,8 @@ export async function syncGuardianContactsFromSycamore(input: {
           payload: {
             studentId: student.id,
             externalStudentId,
-            email: contact.email
+            email: contact.email,
+            phone: contact.phone
           }
         })
       );

@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  fetchSycamoreContacts,
   fetchSycamoreDetentionDetail,
   fetchSycamoreDisciplineLogDetail,
+  fetchSycamoreFamilies,
   fetchSycamoreStudentDisciplineOverview,
   fetchSycamoreStudents,
   fetchSycamoreDisciplineRange,
@@ -233,6 +235,36 @@ test("fetchSycamoreStudents requests the school roster", async () => {
 
   assert.equal(seenUrls[0]?.includes("/School/1002/Students"), true);
   assert.equal(students.length, 1);
+});
+
+test("fetchSycamoreFamilies and fetchSycamoreContacts request the school-level family endpoints", async () => {
+  const seenUrls: string[] = [];
+  const config = {
+    baseUrl: "https://school.sycamoreeducation.com/api/v1",
+    accessToken: "secret-token",
+    schoolId: "1002",
+    disciplinePathTemplate: "/School/{schoolId}/Discipline",
+    studentsPathTemplate: "/School/{schoolId}/Students",
+    timeoutMs: 2_000,
+    maxAttempts: 1,
+    retryBaseDelayMs: 1
+  };
+
+  const fetchImpl: typeof fetch = async (input) => {
+    seenUrls.push(String(input));
+    return new Response(JSON.stringify([{ ID: "1" }]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const families = await fetchSycamoreFamilies(config, { fetchImpl });
+  const contacts = await fetchSycamoreContacts(config, { fetchImpl });
+
+  assert.equal(seenUrls[0], "https://school.sycamoreeducation.com/api/v1/School/1002/Families");
+  assert.equal(seenUrls[1], "https://school.sycamoreeducation.com/api/v1/School/1002/Contacts");
+  assert.equal(families.length, 1);
+  assert.equal(contacts.length, 1);
 });
 
 test("fetchSycamoreStudentDisciplineOverview requests the live student overview endpoint", async () => {
