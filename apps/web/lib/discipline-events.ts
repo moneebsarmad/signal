@@ -205,7 +205,8 @@ function buildDisciplineEventsSupabaseQuery(
     .from("discipline_events")
     .select("*")
     .order("incident_date", { ascending: false, nullsFirst: false })
-    .order("source_priority", { ascending: true });
+    .order("source_priority", { ascending: true })
+    .order("event_key", { ascending: true });
 
   if (filters?.sourceType) {
     query = query.eq("source_type", filters.sourceType);
