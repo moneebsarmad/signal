@@ -8,6 +8,7 @@ import {
   type DemeritEscalationBandId
 } from "@/lib/demerit-escalation";
 import { parseRunStatusSummary } from "@/lib/policies";
+import { resolveCanonicalStudentId } from "@/lib/student-identity";
 
 export type DashboardSourceType = IngestionSourceType | "all";
 
@@ -109,31 +110,6 @@ function normalizeSourceType(value: string | undefined): DashboardSourceType {
     return value;
   }
   return DEFAULT_SOURCE_TYPE;
-}
-
-function resolveCanonicalStudentId(
-  event: DisciplineEventRecord,
-  input: {
-    studentsById: Map<string, Student>;
-    studentIdByExternalId: Map<string, string>;
-  }
-): string {
-  if (event.localStudentId && input.studentsById.has(event.localStudentId)) {
-    return event.localStudentId;
-  }
-
-  if (event.studentExternalId) {
-    const resolvedStudentId = input.studentIdByExternalId.get(event.studentExternalId);
-    if (resolvedStudentId) {
-      return resolvedStudentId;
-    }
-  }
-
-  if (event.localStudentId) {
-    return event.localStudentId;
-  }
-
-  return event.studentId;
 }
 
 function isMissingGuardianContactsTableError(error: unknown): boolean {

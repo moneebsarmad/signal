@@ -1,6 +1,8 @@
 import type { Student } from "@syc/domain";
 import type { StorageRepositories } from "@syc/storage";
 
+import type { DisciplineEventRecord } from "@/lib/discipline-events";
+
 function normalizeToken(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -148,4 +150,29 @@ export function stableStudentId(studentReference: string): string {
     hash = (hash * 33) ^ normalized.charCodeAt(index);
   }
   return `stu_${(hash >>> 0).toString(36)}`;
+}
+
+export function resolveCanonicalStudentId(
+  event: DisciplineEventRecord,
+  input: {
+    studentsById: Map<string, Student>;
+    studentIdByExternalId: Map<string, string>;
+  }
+): string {
+  if (event.localStudentId && input.studentsById.has(event.localStudentId)) {
+    return event.localStudentId;
+  }
+
+  if (event.studentExternalId) {
+    const resolvedStudentId = input.studentIdByExternalId.get(event.studentExternalId);
+    if (resolvedStudentId) {
+      return resolvedStudentId;
+    }
+  }
+
+  if (event.localStudentId) {
+    return event.localStudentId;
+  }
+
+  return event.studentId;
 }

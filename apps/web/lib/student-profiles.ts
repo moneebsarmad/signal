@@ -9,6 +9,7 @@ import type { StorageRepositories } from "@syc/storage";
 
 import { getDemeritEscalationBand, type DemeritEscalationBandId } from "@/lib/demerit-escalation";
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
+import { resolveCanonicalStudentId } from "@/lib/student-identity";
 
 export interface StudentDirectoryFilters {
   search?: string;
@@ -313,6 +314,7 @@ export async function buildStudentDirectoryRows(
       .filter((student) => Boolean(student.externalId))
       .map((student) => [student.externalId as string, student.id] as const)
   );
+  const studentsById = new Map(students.map((student) => [student.id, student] as const));
 
   const aggregateByStudentId = new Map<
     string,
@@ -324,7 +326,10 @@ export async function buildStudentDirectoryRows(
   >();
 
   for (const event of disciplineEvents) {
-    const resolvedStudentId = event.localStudentId ?? (event.studentExternalId ? studentIdByExternalId.get(event.studentExternalId) : null);
+    const resolvedStudentId = resolveCanonicalStudentId(event, {
+      studentsById,
+      studentIdByExternalId
+    });
     if (!resolvedStudentId) {
       continue;
     }

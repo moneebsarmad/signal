@@ -260,6 +260,81 @@ test("buildStudentDirectoryRows filters the communication ladder and exact handb
   });
 });
 
+test("buildStudentDirectoryRows merges split student identities before filtering 40+ bands", async () => {
+  await withoutSupabaseEnv(async () => {
+    const storage = createInMemoryStorage({
+      parseRuns: [],
+      rawIncidents: [],
+      reviewTasks: [],
+      students: seedStudents(),
+      approvedIncidents: [
+        {
+          id: "inc_split_sycamore",
+          studentId: "sycamore:student-1",
+          sourceType: "sycamore_api",
+          sourceRecordId: "disc-split-1",
+          externalStudentId: "student-1",
+          gradeAtEvent: "8",
+          eventType: "discipline",
+          occurredAt: "2026-03-01T10:00:00.000Z",
+          writeupDate: "2026-03-01",
+          points: 35,
+          reason: "Repeated disruption",
+          violation: "Repeated disruption",
+          violationRaw: "Repeated disruption",
+          level: 3,
+          comment: "",
+          description: "Repeated disruption",
+          resolution: "Conference",
+          teacherName: "Ms Smith",
+          authorName: "Ms Smith",
+          authorNameRaw: null,
+          sourceJobId: "run_sycamore_split",
+          fingerprint: "fp_split_sycamore",
+          reviewedBy: "reviewer@school.org",
+          reviewedAt: "2026-03-01T11:00:00.000Z"
+        },
+        {
+          id: "inc_split_manual",
+          studentId: "stu_1",
+          sourceType: "manual_pdf",
+          sourceRecordId: "pdf-split-1",
+          externalStudentId: "student-1",
+          gradeAtEvent: "8",
+          eventType: "discipline",
+          occurredAt: "2026-03-05T10:00:00.000Z",
+          writeupDate: "2026-03-05",
+          points: 10,
+          reason: "Hallway conduct",
+          violation: "Hallway conduct",
+          violationRaw: "Hallway conduct",
+          level: 1,
+          comment: "",
+          description: "Hallway conduct",
+          resolution: "Warning",
+          teacherName: "Ms Smith",
+          authorName: "Ms Smith",
+          authorNameRaw: null,
+          sourceJobId: "run_manual_split",
+          fingerprint: "fp_split_manual",
+          reviewedBy: "reviewer@school.org",
+          reviewedAt: "2026-03-05T11:00:00.000Z"
+        }
+      ],
+      interventions: seedInterventions(),
+      notifications: seedNotifications(),
+      auditEvents: seedAuditEvents()
+    });
+
+    const rows = await buildStudentDirectoryRows(storage, { bandId: "points_40_plus" });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.id, "stu_1");
+    assert.equal(rows[0]?.totalPoints, 45);
+    assert.equal(rows[0]?.incidentCount, 2);
+  });
+});
+
 test("buildStudentDetailSnapshot returns merged incident history for the selected student by default", async () => {
   await withoutSupabaseEnv(async () => {
     const storage = createInMemoryStorage({
