@@ -83,16 +83,20 @@ export interface AnalyticsRepeatIncidentMetric {
   studentsWithIncidents: number;
   repeat14Count: number;
   repeat14Rate: number;
+  repeat14StudentIds: string[];
   repeat30Count: number;
   repeat30Rate: number;
+  repeat30StudentIds: string[];
   sameBehavior30Count: number;
   sameBehavior30Rate: number;
+  sameBehavior30StudentIds: string[];
 }
 
 export interface AnalyticsConcentrationMetric {
   studentsWithPoints: number;
   topDecileStudents: number;
   topDecileShare: number;
+  topDecileStudentIds: string[];
   topThreeShare: number;
   medianPoints: number | null;
   profile: string;
@@ -245,6 +249,27 @@ type TrendBucketMode = "day" | "week" | "month";
 const DEFAULT_SOURCE_TYPE: IngestionSourceType = "sycamore_api";
 const DAY_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_WINDOW_DAYS = 30;
+const SECONDARY_ANALYTICS_GRADES = new Set(["6", "7", "8", "9", "10", "11", "12"]);
+
+function normalizeThresholdBandFilter(value: string | undefined): DemeritEscalationBandId | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (value === "points_20_29" || value === "points_35_39") {
+    return "points_20_39";
+  }
+
+  if (value === "below_10" || value === "points_10_19" || value === "points_20_39" || value === "points_40_plus") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function isSecondaryAnalyticsGrade(value: string | null | undefined): value is string {
+  return Boolean(value && SECONDARY_ANALYTICS_GRADES.has(value));
+}
 
 const BEHAVIOR_THEME_DEFINITIONS: ThemeDefinition[] = [
   {
@@ -686,8 +711,8 @@ function buildThresholdPressureRows(
   currentTotalsByStudent: Map<string, number>,
   crossingCountsByBand: Map<string, number>
 ): AnalyticsSnapshot["thresholdPressure"] {
-  const totalStudents = currentTotalsByStudent.size;
-  const rows = demeritEscalationBands.map((band) => {
+  const liveBands = demeritEscalationBands.filter((band) => band.id !== "below_10");
+  const rows = liveBands.map((band) => {
     const studentCount = [...currentTotalsByStudent.values()].filter(
       (points) => getDemeritEscalationBand(points).id === band.id
     ).length;
@@ -697,20 +722,23 @@ function buildThresholdPressureRows(
       shortLabel: band.shortLabel,
       tone: band.tone,
       studentCount,
-      share: share(studentCount, totalStudents),
+      share: 0,
       enteredCount: crossingCountsByBand.get(band.id) ?? 0
     };
   });
+  const totalStudents = rows.reduce((sum, row) => sum + row.studentCount, 0);
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    share: share(row.studentCount, totalStudents)
+  }));
 
   return {
-    escalatedStudents: rows
-      .filter((row) => row.bandId !== "below_10")
-      .reduce((sum, row) => sum + row.studentCount, 0),
-    criticalStudents: rows
-      .filter((row) => row.bandId === "points_35_39" || row.bandId === "points_40_plus")
+    escalatedStudents: totalStudents,
+    criticalStudents: normalizedRows
+      .filter((row) => row.bandId === "points_40_plus")
       .reduce((sum, row) => sum + row.studentCount, 0),
     crossedIntoHigherBand: [...crossingCountsByBand.values()].reduce((sum, value) => sum + value, 0),
-    rows
+    rows: normalizedRows
   };
 }
 
@@ -753,7 +781,7 @@ function buildGradePressureRows(
     if (totalPoints >= 10) {
       row.escalatedStudents += 1;
     }
-    if (totalPoints >= 35) {
+    if (totalPoints >= 40) {
       row.criticalStudents += 1;
     }
     liveStudentsByGrade.set(grade, row);
@@ -886,10 +914,13 @@ function buildRepeatIncidentMetric(
     studentsWithIncidents: studentsWithIncidents.size,
     repeat14Count: repeat14Students.size,
     repeat14Rate: share(repeat14Students.size, studentsWithIncidents.size),
+    repeat14StudentIds: [...repeat14Students],
     repeat30Count: repeat30Students.size,
     repeat30Rate: share(repeat30Students.size, studentsWithIncidents.size),
+    repeat30StudentIds: [...repeat30Students],
     sameBehavior30Count: sameBehavior30Students.size,
-    sameBehavior30Rate: share(sameBehavior30Students.size, studentsWithIncidents.size)
+    sameBehavior30Rate: share(sameBehavior30Students.size, studentsWithIncidents.size),
+    sameBehavior30StudentIds: [...sameBehavior30Students]
   };
 }
 
@@ -899,10 +930,12 @@ function buildConcentrationMetric(filteredEvents: DisciplineEventRecord[]): Anal
     pointsByStudent.set(event.studentId, (pointsByStudent.get(event.studentId) ?? 0) + event.points);
   }
 
-  const pointValues = [...pointsByStudent.values()].sort((left, right) => right - left);
+  const sortedStudentPoints = [...pointsByStudent.entries()].sort((left, right) => right[1] - left[1]);
+  const pointValues = sortedStudentPoints.map(([, value]) => value);
   const totalPoints = pointValues.reduce((sum, value) => sum + value, 0);
   const studentsWithPoints = pointValues.length;
   const topDecileStudents = studentsWithPoints > 0 ? Math.max(1, Math.ceil(studentsWithPoints * 0.1)) : 0;
+  const topDecileStudentIds = sortedStudentPoints.slice(0, topDecileStudents).map(([studentId]) => studentId);
   const topDecileShare = share(
     pointValues.slice(0, topDecileStudents).reduce((sum, value) => sum + value, 0),
     totalPoints
@@ -915,6 +948,7 @@ function buildConcentrationMetric(filteredEvents: DisciplineEventRecord[]): Anal
     studentsWithPoints,
     topDecileStudents,
     topDecileShare,
+    topDecileStudentIds,
     topThreeShare,
     medianPoints: median(pointValues),
     profile
@@ -1232,9 +1266,9 @@ export function readAnalyticsFilters(searchParams: URLSearchParams): AnalyticsFi
     student: normalizeFilterValue(searchParams.get("student") || undefined) || undefined,
     violation: normalizeFilterValue(searchParams.get("violation") || undefined) || undefined,
     author: normalizeFilterValue(searchParams.get("author") || undefined) || undefined,
-    thresholdBand: (normalizeFilterValue(searchParams.get("thresholdBand") || undefined) || undefined) as
-      | DemeritEscalationBandId
-      | undefined
+    thresholdBand: normalizeThresholdBandFilter(
+      normalizeFilterValue(searchParams.get("thresholdBand") || undefined) || undefined
+    )
   };
 }
 
@@ -1250,12 +1284,12 @@ export async function buildAnalyticsSnapshot(
   ]);
 
   const normalizedFilters = {
-    grade: normalizeFilterValue(filters.grade),
+    grade: isSecondaryAnalyticsGrade(normalizeFilterValue(filters.grade)) ? normalizeFilterValue(filters.grade) : "",
     sourceType: filters.sourceType ?? DEFAULT_SOURCE_TYPE,
     student: normalizeFilterValue(filters.student),
     violation: normalizeFilterValue(filters.violation),
     author: normalizeFilterValue(filters.author),
-    thresholdBand: normalizeFilterValue(filters.thresholdBand)
+    thresholdBand: normalizeThresholdBandFilter(normalizeFilterValue(filters.thresholdBand) || undefined) ?? ""
   };
 
   const studentsById = new Map(
@@ -1429,7 +1463,7 @@ export async function buildAnalyticsSnapshot(
         ...new Set(
           [...students.map((student) => student.grade), ...filteredEvents.map((event) => event.grade ?? "unknown")].filter(Boolean)
         )
-      ].sort((left, right) => left.localeCompare(right));
+      ].filter((grade): grade is string => isSecondaryAnalyticsGrade(grade)).sort((left, right) => left.localeCompare(right));
   const gradePressureRows = buildGradePressureRows(gradesInScope, filteredEvents, studentsById, currentTotalsByStudent);
   const severityMix = buildSeverityMix(filteredEvents);
   const repeatIncident = buildRepeatIncidentMetric(filteredEvents, comparableEvents);
@@ -1527,7 +1561,9 @@ export async function buildAnalyticsSnapshot(
 
   const availableGrades = [
     ...new Set(sourceScopedEvents.map((event) => event.grade).filter((value): value is string => Boolean(value)))
-  ].sort((left, right) => left.localeCompare(right));
+  ]
+    .filter((grade) => isSecondaryAnalyticsGrade(grade))
+    .sort((left, right) => left.localeCompare(right));
   const availableViolations = [
     ...new Set(
       sourceScopedEvents

@@ -59,6 +59,21 @@ function seedStudents(): Student[] {
   ];
 }
 
+function seedStudentsWithElementaryGrade(): Student[] {
+  return [
+    ...seedStudents(),
+    {
+      id: "stu_5",
+      externalId: "student-5",
+      fullName: "Elementary Student",
+      grade: "5",
+      active: true,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z"
+    }
+  ];
+}
+
 function seedIncidents(): ApprovedIncident[] {
   return [
     {
@@ -386,6 +401,11 @@ test("buildAnalyticsSnapshot keeps live escalation bands even when the analytics
   assert.equal(snapshot.summary[1]?.value, 1);
   assert.equal(snapshot.summary[2]?.value, 4);
   assert.equal(snapshot.thresholdPressure.escalatedStudents, 1);
+  assert.deepEqual(
+    snapshot.thresholdPressure.rows.map((row) => row.bandId),
+    ["points_10_19", "points_20_39", "points_40_plus"]
+  );
+  assert.equal(snapshot.thresholdPressure.rows[0]?.share, 100);
   assert.equal(snapshot.studentRows[0]?.studentId, "stu_1");
   assert.equal(snapshot.studentRows[0]?.totalPoints, 4);
   assert.equal(snapshot.studentRows[0]?.currentTotalPoints, 16);
@@ -417,13 +437,22 @@ test("buildAnalyticsSnapshot computes pressure, recurrence, workflow, and narrat
   assert.equal(snapshot.summary[2]?.value, 22);
   assert.equal(snapshot.summary[3]?.value, 1);
   assert.equal(snapshot.thresholdPressure.crossedIntoHigherBand, 1);
+  assert.equal(snapshot.thresholdPressure.rows.length, 3);
+  assert.equal(
+    snapshot.thresholdPressure.rows.reduce((sum, row) => sum + row.share, 0),
+    100
+  );
 
   assert.equal(snapshot.repeatIncident.repeat14Rate, 25);
   assert.equal(snapshot.repeatIncident.repeat30Rate, 75);
   assert.equal(snapshot.repeatIncident.sameBehavior30Rate, 75);
+  assert.deepEqual(snapshot.repeatIncident.repeat14StudentIds, ["stu_2"]);
+  assert.deepEqual(snapshot.repeatIncident.repeat30StudentIds.sort(), ["stu_1", "stu_2", "stu_3"]);
+  assert.deepEqual(snapshot.repeatIncident.sameBehavior30StudentIds.sort(), ["stu_1", "stu_2", "stu_3"]);
 
   assert.equal(snapshot.concentration.topDecileStudents, 1);
   assert.equal(snapshot.concentration.topDecileShare, 40.9);
+  assert.deepEqual(snapshot.concentration.topDecileStudentIds, ["stu_1"]);
   assert.equal(snapshot.concentration.profile, "Moderately concentrated");
 
   assert.equal(snapshot.behaviorShiftRows[0]?.behavior, "Attendance / punctuality");
@@ -441,4 +470,24 @@ test("buildAnalyticsSnapshot computes pressure, recurrence, workflow, and narrat
   assert.equal(snapshot.narrativeThemeRows.some((row) => row.theme === "Boundary testing"), true);
   assert.equal(snapshot.notificationStatus.queued, 1);
   assert.equal(snapshot.notificationStatus.failed, 1);
+});
+
+test("buildAnalyticsSnapshot keeps grade pressure scoped to grades 6 through 12", async () => {
+  const storage = createInMemoryStorage({
+    parseRuns: [],
+    rawIncidents: [],
+    reviewTasks: [],
+    students: seedStudentsWithElementaryGrade(),
+    approvedIncidents: seedIncidents(),
+    policies: [seedPolicy()],
+    interventions: seedInterventions(),
+    notifications: seedNotifications()
+  });
+
+  const snapshot = await buildAnalyticsSnapshot(storage, {
+    sourceType: "sycamore_api"
+  });
+
+  assert.equal(snapshot.availableFilters.grades.includes("5"), false);
+  assert.equal(snapshot.gradePressureRows.some((row) => row.grade === "5"), false);
 });

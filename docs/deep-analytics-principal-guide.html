@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deep Analytics Guide</title>
+    <style>
+      @page {
+        size: letter portrait;
+        margin: 0.42in;
+      }
+
+      :root {
+        --ink: #1f2937;
+        --muted: #5f6b77;
+        --line: #d7d3ca;
+        --accent: #115e59;
+        --warn: #b45309;
+        --danger: #b42318;
+        --surface: #fcfaf6;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: white;
+        font-family: "Helvetica Neue", Arial, sans-serif;
+      }
+
+      .page {
+        width: 100%;
+        min-height: 100%;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #fffdf9 0%, #f8f3ea 100%);
+        padding: 0.34in;
+      }
+
+      .eyebrow {
+        margin: 0;
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 8px 0 8px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 28px;
+        font-weight: 500;
+      }
+
+      .summary {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.02fr 1fr;
+        gap: 12px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.88);
+        padding: 12px 13px;
+        break-inside: avoid;
+      }
+
+      h2 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      h3 {
+        margin: 10px 0 4px;
+        font-size: 12px;
+      }
+
+      p, li {
+        font-size: 11px;
+        line-height: 1.42;
+        margin: 0;
+      }
+
+      ul {
+        margin: 6px 0 0 16px;
+        padding: 0;
+      }
+
+      li + li {
+        margin-top: 4px;
+      }
+
+      .mini {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .rule {
+        margin: 8px 0 0;
+        padding: 7px 9px;
+        border-radius: 12px;
+        background: #f7f4ee;
+      }
+
+      .tones {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .tone {
+        border-radius: 12px;
+        padding: 7px 8px;
+        border: 1px solid var(--line);
+        background: white;
+      }
+
+      .tone strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .warn strong {
+        color: var(--warn);
+      }
+
+      .danger strong {
+        color: var(--danger);
+      }
+
+      .footer {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.35;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <p class="eyebrow">Signal Analytics Guide</p>
+      <h1>Deep Analytics, in plain language</h1>
+      <p class="summary">
+        This page is a decision screen for principals. It answers five questions: how much behavior pressure happened in the selected window, where it is coming from, whether the same students are repeating, whether interventions are working, and which students need attention now. Grade breakout on this page should focus on grades 6 through 12.
+      </p>
+
+      <section class="grid">
+        <div class="card">
+          <h2>What The Main Areas Mean</h2>
+          <ul>
+            <li><strong>In window</strong> means inside the selected date range.</li>
+            <li><strong>Live</strong> means where students stand right now overall, not just in that window.</li>
+            <li><strong>Rates by grade</strong> compares grades fairly by using incidents or points per 100 active students.</li>
+            <li><strong>Behavior movement</strong> compares the current window to the prior same-length window.</li>
+            <li><strong>Student drilldown</strong> should be used after spotting a pattern so staff can act on named students, not just percentages.</li>
+          </ul>
+          <div class="rule">
+            <p><strong>Use it this way:</strong> start with the summary cards, check live band pressure, check repeat and concentration, then open the student list for action.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Incident Intensity</h2>
+          <p>The app assigns each incident to a severity bucket using either the incident level or the point value.</p>
+          <div class="tones">
+            <div class="tone">
+              <strong>Lower severity</strong>
+              <p>Anything below the thresholds below.</p>
+            </div>
+            <div class="tone warn">
+              <strong>Moderate severity</strong>
+              <p>Level 2 or higher, or 3+ points.</p>
+            </div>
+            <div class="tone danger">
+              <strong>High severity</strong>
+              <p>Level 3 or higher, or 5+ points.</p>
+            </div>
+          </div>
+          <p class="mini" style="margin-top: 8px;">If level is missing, the point value alone decides the bucket.</p>
+        </div>
+
+        <div class="card">
+          <h2>Recurrence And Concentration</h2>
+          <ul>
+            <li><strong>Repeat 14d:</strong> a student in the current window also had an earlier incident within the prior 14 days.</li>
+            <li><strong>Repeat 30d:</strong> same idea, but within 30 days.</li>
+            <li><strong>Same pattern:</strong> the student repeated the same behavior family within 30 days, not just any incident.</li>
+            <li><strong>Top decile share:</strong> the top 10% of students by points in the current window account for this share of all points.</li>
+          </ul>
+          <div class="rule">
+            <p><strong>Operational use:</strong> these metrics should always have a “View students” drilldown. Without that, the percentages are informative but not actionable.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Concentration Profile</h2>
+          <p>The page first totals points by student inside the current window, ranks students from highest to lowest, and then checks how much of the total point load is carried by the top 10% of students.</p>
+          <ul>
+            <li><strong>Highly concentrated:</strong> top decile holds 60% or more of points.</li>
+            <li><strong>Moderately concentrated:</strong> top decile holds 40% to 59.9%.</li>
+            <li><strong>Broadly distributed:</strong> top decile holds under 40%.</li>
+          </ul>
+          <p class="mini" style="margin-top: 8px;">The page also shows the top-three share and the median student point load for extra context.</p>
+        </div>
+
+        <div class="card">
+          <h2>Timing Hotspots</h2>
+          <p>Only incidents with an actual timestamp are included. Each one is grouped by weekday and time block, then the page surfaces the highest-volume clusters.</p>
+          <ul>
+            <li>Early arrival: before 7:00</li>
+            <li>Arrival: 7:00 to 8:59</li>
+            <li>Morning: 9:00 to 10:59</li>
+            <li>Late morning: 11:00 to 12:59</li>
+            <li>Lunch / midday: 13:00 to 14:59</li>
+            <li>Afternoon: 15:00 to 16:59</li>
+            <li>After school: 17:00 and later</li>
+          </ul>
+          <p class="mini" style="margin-top: 8px;">Time coverage tells you what share of incidents had enough timestamp detail to participate in this analysis.</p>
+        </div>
+
+        <div class="card">
+          <h2>Narrative Themes</h2>
+          <p>These are keyword-based tags built from incident reason, violation, comments, description, and resolution text. They are not hand-coded judgments. They are pattern hints.</p>
+          <ul>
+            <li>Boundary testing</li>
+            <li>Peer conflict</li>
+            <li>Attention seeking / disruption</li>
+            <li>Attendance / punctuality</li>
+            <li>Device misuse</li>
+            <li>Academic avoidance</li>
+            <li>Dishonesty</li>
+            <li>Safety / risk</li>
+            <li>Property misuse</li>
+            <li>Emotional regulation</li>
+          </ul>
+          <p class="mini" style="margin-top: 8px;">Because this is heuristic tagging, leaders should use it to spot direction and then confirm with actual student cases.</p>
+        </div>
+
+        <div class="card">
+          <h2>What Principals Should Watch</h2>
+          <ul>
+            <li>High <strong>live 10+</strong> means active case pressure now.</li>
+            <li>High <strong>repeat 30d</strong> means students are cycling back quickly.</li>
+            <li>High <strong>same pattern</strong> means a targeted behavior is not being interrupted.</li>
+            <li>High <strong>top decile share</strong> means a small cluster is driving the load.</li>
+            <li>High <strong>overdue interventions</strong> means the response system is behind.</li>
+            <li>Strong <strong>timing hotspots</strong> suggest supervision or schedule problems.</li>
+          </ul>
+        </div>
+      </section>
+
+      <p class="footer">
+        Definitions match the current Deep Analytics logic in Signal as of April 7, 2026. This guide is meant for leadership use, not as a technical specification.
+      </p>
+    </main>
+  </body>
+</html>

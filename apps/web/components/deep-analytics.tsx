@@ -108,15 +108,19 @@ interface AnalyticsSnapshot {
     studentsWithIncidents: number;
     repeat14Count: number;
     repeat14Rate: number;
+    repeat14StudentIds: string[];
     repeat30Count: number;
     repeat30Rate: number;
+    repeat30StudentIds: string[];
     sameBehavior30Count: number;
     sameBehavior30Rate: number;
+    sameBehavior30StudentIds: string[];
   };
   concentration: {
     studentsWithPoints: number;
     topDecileStudents: number;
     topDecileShare: number;
+    topDecileStudentIds: string[];
     topThreeShare: number;
     medianPoints: number | null;
     profile: string;
@@ -253,6 +257,12 @@ function summaryValue(metric: AnalyticsSnapshot["summary"][number]): string {
   return metric.label.includes("%") ? formatPercent(metric.value) : formatNumber(metric.value);
 }
 
+interface StudentDrilldownFilter {
+  key: string;
+  title: string;
+  studentIds: string[];
+}
+
 export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
   const [grade, setGrade] = useState("");
   const [from, setFrom] = useState("");
@@ -265,6 +275,8 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
   const [data, setData] = useState<AnalyticsSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [studentDrilldown, setStudentDrilldown] = useState<StudentDrilldownFilter | null>(null);
+  const studentListRef = useRef<HTMLDetailsElement | null>(null);
   const filtersRef = useRef({
     grade: "",
     from: "",
@@ -289,6 +301,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
   const loadSnapshot = useCallback(async (nextFilters = filtersRef.current) => {
     setIsLoading(true);
     setError(null);
+    setStudentDrilldown(null);
 
     const params = new URLSearchParams();
     if (nextFilters.grade.trim()) {
@@ -369,6 +382,31 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
   );
   const interventionRows = useMemo(() => analyticsStatusRows(data?.interventionStatus ?? {}), [data]);
   const notificationRows = useMemo(() => analyticsStatusRows(data?.notificationStatus ?? {}), [data]);
+  const visibleStudentRows = useMemo(() => {
+    if (!data) {
+      return [];
+    }
+    if (!studentDrilldown) {
+      return data.studentRows;
+    }
+    const selectedIds = new Set(studentDrilldown.studentIds);
+    return data.studentRows.filter((row) => selectedIds.has(row.studentId));
+  }, [data, studentDrilldown]);
+
+  function applyStudentDrilldown(filter: StudentDrilldownFilter) {
+    setStudentDrilldown(filter);
+    requestAnimationFrame(() => {
+      if (!studentListRef.current) {
+        return;
+      }
+      studentListRef.current.open = true;
+      studentListRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function clearStudentDrilldown() {
+    setStudentDrilldown(null);
+  }
 
   return (
     <div className="space-y-6">
@@ -501,7 +539,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge tone="warning">{data.thresholdPressure.escalatedStudents} live 10+</StatusBadge>
-                  <StatusBadge tone="danger">{data.thresholdPressure.criticalStudents} live 35+</StatusBadge>
+                  <StatusBadge tone="danger">{data.thresholdPressure.criticalStudents} live 40+</StatusBadge>
                   <StatusBadge tone="info">{data.thresholdPressure.crossedIntoHigherBand} entered higher band</StatusBadge>
                 </div>
               </div>
@@ -559,7 +597,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                           <th className={tableHeadCellClassName}>Incidents /100</th>
                           <th className={tableHeadCellClassName}>Points /100</th>
                           <th className={tableHeadCellClassName}>Live 10+</th>
-                          <th className={tableHeadCellClassName}>Live 35+</th>
+                          <th className={tableHeadCellClassName}>Live 40+</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--color-line)]">
@@ -644,6 +682,21 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <p className="text-sm text-[var(--color-muted)]">
                     {data.repeatIncident.repeat14Count} of {data.repeatIncident.studentsWithIncidents} students had a prior incident in the last 14 days.
                   </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={data.repeatIncident.repeat14StudentIds.length === 0}
+                    onClick={() =>
+                      applyStudentDrilldown({
+                        key: "repeat14",
+                        title: "Repeat 14d students",
+                        studentIds: data.repeatIncident.repeat14StudentIds
+                      })
+                    }
+                  >
+                    View students
+                  </Button>
                 </SoftPanel>
                 <SoftPanel className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">Repeat 30d</p>
@@ -653,6 +706,21 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <p className="text-sm text-[var(--color-muted)]">
                     {data.repeatIncident.repeat30Count} students carried a 30-day recurrence pattern.
                   </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={data.repeatIncident.repeat30StudentIds.length === 0}
+                    onClick={() =>
+                      applyStudentDrilldown({
+                        key: "repeat30",
+                        title: "Repeat 30d students",
+                        studentIds: data.repeatIncident.repeat30StudentIds
+                      })
+                    }
+                  >
+                    View students
+                  </Button>
                 </SoftPanel>
                 <SoftPanel className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">Same pattern</p>
@@ -662,6 +730,21 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <p className="text-sm text-[var(--color-muted)]">
                     {data.repeatIncident.sameBehavior30Count} students repeated the same behavior family inside 30 days.
                   </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={data.repeatIncident.sameBehavior30StudentIds.length === 0}
+                    onClick={() =>
+                      applyStudentDrilldown({
+                        key: "samePattern30",
+                        title: "Same pattern students",
+                        studentIds: data.repeatIncident.sameBehavior30StudentIds
+                      })
+                    }
+                  >
+                    View students
+                  </Button>
                 </SoftPanel>
               </div>
 
@@ -674,6 +757,21 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <p className="text-sm text-[var(--color-muted)]">
                     Top {data.concentration.topDecileStudents} students account for this share of window points.
                   </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={data.concentration.topDecileStudentIds.length === 0}
+                    onClick={() =>
+                      applyStudentDrilldown({
+                        key: "topDecile",
+                        title: "Top decile students",
+                        studentIds: data.concentration.topDecileStudentIds
+                      })
+                    }
+                  >
+                    View students
+                  </Button>
                 </SoftPanel>
                 <SoftPanel className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-subtle)]">Concentration profile</p>
@@ -940,7 +1038,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
             </Panel>
           </section>
 
-          <details className="group">
+          <details className="group" ref={studentListRef}>
             <summary className="list-none cursor-pointer">
               <Panel className="flex items-center justify-between gap-3">
                 <div>
@@ -950,17 +1048,35 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <h2 className="mt-2 font-display text-2xl text-[var(--color-ink)]">Window drilldown</h2>
                 </div>
                 <div className="flex items-center gap-3">
-                  <StatusBadge tone="warning">{data.studentRows.length} rows</StatusBadge>
+                  <StatusBadge tone="warning">{visibleStudentRows.length} rows</StatusBadge>
                   <ChevronDown className="h-5 w-5 text-[var(--color-muted)] transition group-open:rotate-180" />
                 </div>
               </Panel>
             </summary>
 
             <Panel className="mt-4 space-y-5">
-              {data.studentRows.length === 0 ? (
+              {studentDrilldown ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.25rem] border border-[var(--color-line)] bg-[var(--color-soft-surface)] px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-[var(--color-ink)]">{studentDrilldown.title}</p>
+                    <p className="text-sm text-[var(--color-muted)]">
+                      Showing {visibleStudentRows.length} matching students from the current analytics window.
+                    </p>
+                  </div>
+                  <Button type="button" size="sm" variant="secondary" onClick={clearStudentDrilldown}>
+                    Clear filter
+                  </Button>
+                </div>
+              ) : null}
+
+              {visibleStudentRows.length === 0 ? (
                 <EmptyState
                   title="No students in window"
-                  description="Adjust the deep analytics filters to bring matching students back into view."
+                  description={
+                    studentDrilldown
+                      ? "This drilldown does not have any matching students in the current window."
+                      : "Adjust the deep analytics filters to bring matching students back into view."
+                  }
                 />
               ) : (
                 <div className={tableShellClassName}>
@@ -977,7 +1093,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[var(--color-line)]">
-                        {data.studentRows.map((row) => {
+                        {visibleStudentRows.map((row) => {
                           const band = getDemeritEscalationBand(row.currentTotalPoints);
                           return (
                             <tr key={row.studentId}>
