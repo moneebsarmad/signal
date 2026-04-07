@@ -85,7 +85,8 @@ test("upload -> review -> policy -> notify -> intervention complete flow", async
         { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" },
         { label: "X+10", dueDays: 7, assignedTo: "Dean", notesTemplate: "Escalated threshold" },
         { label: "X+20", dueDays: 7, assignedTo: "Dean", notesTemplate: "Severe threshold" }
-      ]
+      ],
+      communicationBands: []
     }
   });
 
@@ -172,7 +173,8 @@ test("review approval automatically evaluates policy and queues notifications", 
         { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
         { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
         { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" }
-      ]
+      ],
+      communicationBands: []
     }
   });
 
@@ -261,7 +263,8 @@ test("bulk review approval runs downstream automation once after the batch", asy
         { label: "X-3", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-3" },
         { label: "X-1", dueDays: 3, assignedTo: "Dean", notesTemplate: "Warning at X-1" },
         { label: "X", dueDays: 7, assignedTo: "Dean", notesTemplate: "Reached threshold" }
-      ]
+      ],
+      communicationBands: []
     }
   });
 

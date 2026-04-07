@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ParseRun } from "@syc/domain";
+import type { Intervention, Notification, ParseRun } from "@syc/domain";
 
 import { buildDataOpsSnapshot } from "../lib/data-ops";
 import type { SycamoreStore } from "../lib/sycamore-direct-store";
@@ -209,7 +209,10 @@ test("buildDataOpsSnapshot exposes ingestion breakdown by source and latest dire
       SYCAMORE_DISCIPLINE_PATH_TEMPLATE: "/School/{schoolId}/Discipline"
     },
     async () => {
-      const snapshot = await buildDataOpsSnapshot(storage, { sycamoreStore });
+      const snapshot = await buildDataOpsSnapshot(storage, {
+        sycamoreStore,
+        now: new Date("2026-03-03T12:00:00.000Z")
+      });
 
       assert.equal(snapshot.ingestion.bySource.manual_pdf?.totalJobs, 1);
       assert.equal(snapshot.sycamore.configured, true);
@@ -229,6 +232,180 @@ test("buildDataOpsSnapshot exposes ingestion breakdown by source and latest dire
       assert.equal(snapshot.sycamore.lastRecordsUpserted, 11);
       assert.equal(snapshot.sycamore.lastSyncMode, "manual_range");
       assert.equal(snapshot.sycamore.pathTemplate, "/School/{schoolId}/Discipline");
+      assert.equal(snapshot.health.status, "warning");
+      assert.equal(snapshot.health.openIssues, 1);
+      assert.equal(snapshot.attentionItems[0]?.id, "sycamore-failed-syncs");
+    }
+  );
+});
+
+test("buildDataOpsSnapshot promotes stale syncs and backlog signals into attention items", async () => {
+  const parseRuns: ParseRun[] = [
+    {
+      id: "run_review",
+      sourceType: "manual_pdf",
+      fileName: "discipline-review.pdf",
+      uploadedBy: "admin@school.org",
+      triggeredBy: "admin@school.org",
+      metadataJson: "{}",
+      cursorJson: null,
+      status: "review_required",
+      rowsExtracted: 4,
+      rowsFlagged: 2,
+      startedAt: "2026-03-05T08:00:00.000Z",
+      completedAt: null
+    }
+  ];
+  const interventions: Intervention[] = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      studentId: "22222222-2222-4222-8222-222222222222",
+      policyVersion: 1,
+      milestoneLabel: "X",
+      status: "overdue",
+      dueDate: "2026-03-04T00:00:00.000Z",
+      completedAt: null,
+      assignedTo: "Dean",
+      notes: ""
+    }
+  ];
+  const notifications: Notification[] = [
+    {
+      id: "33333333-3333-4333-8333-333333333333",
+      studentId: "22222222-2222-4222-8222-222222222222",
+      interventionId: "11111111-1111-4111-8111-111111111111",
+      channel: "email",
+      recipient: "family@example.org",
+      status: "failed",
+      providerId: "provider-failed",
+      sentAt: "2026-03-06T10:00:00.000Z",
+      error: "bounce"
+    },
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `44444444-4444-4444-8444-${String(index + 1).padStart(12, "0")}`,
+      studentId: "22222222-2222-4222-8222-222222222222",
+      interventionId: "11111111-1111-4111-8111-111111111111",
+      channel: "email" as const,
+      recipient: `queue${index + 1}@example.org`,
+      status: "queued" as const,
+      providerId: `provider-queued-${index + 1}`,
+      sentAt: null,
+      error: ""
+    }))
+  ];
+
+  const storage = createInMemoryStorage({
+    parseRuns,
+    rawIncidents: [],
+    reviewTasks: [],
+    interventions,
+    notifications
+  });
+
+  const sycamoreStore: SycamoreStore = {
+    async ensureSchema() {},
+    async createSyncLog() {
+      throw new Error("not used in this test");
+    },
+    async updateSyncLog() {
+      throw new Error("not used in this test");
+    },
+    async getLatestSyncLog() {
+      return {
+        id: "sync_latest",
+        triggeredBy: "cron",
+        startedAt: "2026-03-01T08:00:00.000Z",
+        completedAt: "2026-03-01T08:05:00.000Z",
+        recordsSynced: 14,
+        recordsDiscovered: 14,
+        recordsUpserted: 14,
+        status: "success",
+        errorMessage: null,
+        syncMode: "incremental",
+        windowStartDate: "2026-02-28",
+        windowEndDate: "2026-03-01"
+      };
+    },
+    async getLatestSuccessfulSyncLog() {
+      return {
+        id: "sync_latest",
+        triggeredBy: "cron",
+        startedAt: "2026-03-01T08:00:00.000Z",
+        completedAt: "2026-03-01T08:05:00.000Z",
+        recordsSynced: 14,
+        recordsDiscovered: 14,
+        recordsUpserted: 14,
+        status: "success",
+        errorMessage: null,
+        syncMode: "incremental",
+        windowStartDate: "2026-02-28",
+        windowEndDate: "2026-03-01"
+      };
+    },
+    async listRecentSyncLogs() {
+      return [
+        {
+          id: "sync_latest",
+          triggeredBy: "cron",
+          startedAt: "2026-03-01T08:00:00.000Z",
+          completedAt: "2026-03-01T08:05:00.000Z",
+          recordsSynced: 14,
+          recordsDiscovered: 14,
+          recordsUpserted: 14,
+          status: "success",
+          errorMessage: null,
+          syncMode: "incremental",
+          windowStartDate: "2026-02-28",
+          windowEndDate: "2026-03-01"
+        }
+      ];
+    },
+    async listRecentDisciplineLogs() {
+      return [];
+    },
+    async getSyncCounts() {
+      return { total: 1, failed: 0 };
+    },
+    async getDisciplineCounts() {
+      return { total: 14, linked: 14 };
+    },
+    async resolveStudentRecordLinks() {
+      return new Map<string, string>();
+    },
+    async backfillDisciplineLogLinks() {
+      return 0;
+    },
+    async findExistingDisciplineLogIds() {
+      return new Set<string>();
+    },
+    async upsertDisciplineLogs() {}
+  };
+
+  await withEnv(
+    {
+      SYCAMORE_API_ENABLED: "true",
+      SYCAMORE_ACCESS_TOKEN: "token-123",
+      SYCAMORE_SCHOOL_ID: "1002"
+    },
+    async () => {
+      const snapshot = await buildDataOpsSnapshot(storage, {
+        sycamoreStore,
+        now: new Date("2026-03-10T12:00:00.000Z")
+      });
+
+      assert.equal(snapshot.health.status, "critical");
+      assert.equal(snapshot.health.criticalIssues, 1);
+      assert.equal(snapshot.health.warningIssues, 4);
+      assert.deepEqual(
+        snapshot.attentionItems.map((item) => item.id),
+        [
+          "sycamore-sync-critical-stale",
+          "notification-failures",
+          "notification-backlog",
+          "overdue-interventions",
+          "review-required-imports"
+        ]
+      );
     }
   );
 });

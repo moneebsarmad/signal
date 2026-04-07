@@ -13,6 +13,7 @@ function seedPolicy(): Policy {
     warningOffsets: [-3, -1],
     milestones: [0, 10, 20, 30],
     interventionTemplates: "[]",
+    communicationBands: "[]",
     createdBy: "admin@school.org",
     createdAt: "2026-03-01T00:00:00.000Z"
   };
