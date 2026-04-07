@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentSession } from "@/lib/session";
 import { sycamoreDirectSyncRequestSchema } from "@/lib/sycamore-direct-sync";
-import { enqueueSycamoreSyncBatch, type EnqueueSycamoreSyncBatchResult } from "@/lib/sycamore-sync-jobs";
+import { queueCronSycamoreSync } from "@/lib/sycamore-sync-cron";
+import { enqueueSycamoreSyncBatch } from "@/lib/sycamore-sync-jobs";
 
 export const maxDuration = 300;
 
@@ -31,32 +32,6 @@ function statusCodeForError(message: string): number {
     return 500;
   }
   return 400;
-}
-
-type QueueCronSycamoreSyncResult = {
-  status: number;
-  body: {
-    sycamoreSync: EnqueueSycamoreSyncBatchResult["batch"];
-    alreadyQueued: boolean;
-  };
-};
-
-export async function queueCronSycamoreSync(options?: {
-  enqueueBatch?: typeof enqueueSycamoreSyncBatch;
-}): Promise<QueueCronSycamoreSyncResult> {
-  const enqueueBatch = options?.enqueueBatch ?? enqueueSycamoreSyncBatch;
-  const queued = await enqueueBatch({
-    triggeredBy: "cron",
-    actorEmail: "system:cron"
-  });
-
-  return {
-    status: queued.alreadyQueued ? 200 : 202,
-    body: {
-      sycamoreSync: queued.batch,
-      alreadyQueued: queued.alreadyQueued
-    }
-  };
 }
 
 export async function GET(request: NextRequest) {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { EnqueueSycamoreSyncBatchResult } from "../lib/sycamore-sync-jobs";
-import { queueCronSycamoreSync } from "../app/api/sycamore/sync/route";
+import { queueCronSycamoreSync } from "../lib/sycamore-sync-cron";
 
 function makeBatchResult(overrides: Partial<EnqueueSycamoreSyncBatchResult> = {}): EnqueueSycamoreSyncBatchResult {
   return {
