@@ -1,0 +1,25 @@
+name: Sycamore Sync Scheduler
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  enqueue-sync:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: sycamore-sync-scheduler-prod
+      cancel-in-progress: false
+    env:
+      SIGNAL_BASE_URL: ${{ vars.SIGNAL_BASE_URL }}
+      SIGNAL_CRON_SECRET: ${{ secrets.SIGNAL_CRON_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trigger Sycamore sync scheduler
+        run: bash apps/web/scripts/trigger-sycamore-cron.sh /api/sycamore/sync

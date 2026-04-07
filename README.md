@@ -76,7 +76,7 @@ git config core.hooksPath .githooks
 - Operational runbooks added in `docs/runbooks/`.
 - Direct Sycamore sync is the active discipline source:
   - manual admin sync via `/api/sycamore/sync`
-  - nightly production sync via `vercel.json` cron
+  - automated production sync via GitHub Actions against the cron-authenticated Sycamore endpoints
   - imported SIS rows land in `sycamore_discipline_logs` and `sycamore_sync_log`
   - normalized SIS fields include `points`, `level`, `violation`, `violation_raw`, `resolution`, and `author_name`
   - these rows now drive the active discipline workflows across the app
