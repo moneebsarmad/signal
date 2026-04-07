@@ -6,7 +6,7 @@ import type { ApprovedIncident, Intervention, Notification, ParseRun, Policy, St
 import { buildDashboardSnapshot, readDashboardFilters } from "../lib/dashboard";
 import { createInMemoryStorage } from "./review-actions.test";
 
-function seedPolicy(): Policy {
+function seedPolicy(overrides: Partial<Policy> = {}): Policy {
   return {
     version: 1,
     baseThreshold: 10,
@@ -15,7 +15,8 @@ function seedPolicy(): Policy {
     interventionTemplates: "[]",
     communicationBands: "[]",
     createdBy: "admin@school.org",
-    createdAt: "2026-03-01T00:00:00.000Z"
+    createdAt: "2026-03-01T00:00:00.000Z",
+    ...overrides
   };
 }
 
@@ -223,6 +224,40 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
   assert.deepEqual(pdfExceptionSnapshot.parseRunSourceCounts, { manual_pdf: 1 });
+});
+
+test("buildDashboardSnapshot uses editable ladder copy from the saved policy", async () => {
+  const storage = createInMemoryStorage({
+    parseRuns: seedParseRuns(),
+    rawIncidents: [],
+    reviewTasks: [],
+    students: seedStudents(),
+    approvedIncidents: seedIncidents(),
+    policies: [
+      seedPolicy({
+        communicationBands: JSON.stringify([
+          {
+            id: "points_10_19",
+            label: "10 to 19 handbook points",
+            shortLabel: "10-19",
+            parentCommunication: "Call and email the parent or guardian.",
+            adminAction: "Document the outreach and note program risk.",
+            adminMessage: "Use the handbook script for first-level outreach.",
+            policyImpact: "The student enters the first escalation band."
+          }
+        ])
+      })
+    ],
+    interventions: seedInterventions(),
+    notifications: seedNotifications()
+  });
+
+  const snapshot = await buildDashboardSnapshot(storage, {
+    grade: "8"
+  });
+
+  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_10_19")?.parentCommunication, "Call and email the parent or guardian.");
+  assert.equal(snapshot.actionQueue.find((student) => student.currentBandId === "points_10_19")?.adminAction, "Document the outreach and note program risk.");
 });
 
 test("buildDashboardSnapshot merges split student identities before assigning ladder bands", async () => {

@@ -626,6 +626,7 @@ function createDefinitions() {
       "warning_offsets",
       "milestones",
       "intervention_templates",
+      "communication_bands",
       "created_by",
       "created_at"
     ],
@@ -636,6 +637,7 @@ function createDefinitions() {
         warningOffsets: JSON.parse(cell(row, "warning_offsets") || "[]"),
         milestones: JSON.parse(cell(row, "milestones") || "[]"),
         interventionTemplates: cell(row, "intervention_templates"),
+        communicationBands: cell(row, "communication_bands") || "[]",
         createdBy: cell(row, "created_by"),
         createdAt: cell(row, "created_at")
       }),
@@ -645,6 +647,7 @@ function createDefinitions() {
       warning_offsets: JSON.stringify(value.warningOffsets),
       milestones: JSON.stringify(value.milestones),
       intervention_templates: value.interventionTemplates,
+      communication_bands: value.communicationBands,
       created_by: value.createdBy,
       created_at: value.createdAt
     })

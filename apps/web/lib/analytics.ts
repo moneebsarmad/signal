@@ -3,9 +3,10 @@ import type { StorageRepositories } from "@syc/storage";
 
 import { listDisciplineEvents, type DisciplineEventRecord } from "@/lib/discipline-events";
 import {
-  demeritEscalationBands,
   escalationBandOptions,
   getDemeritEscalationBand,
+  resolveDemeritEscalationBands,
+  type DemeritEscalationBand,
   type DemeritEscalationBandId
 } from "@/lib/demerit-escalation";
 
@@ -700,12 +701,13 @@ function timingLabelForEvent(event: DisciplineEventRecord): { weekday: string; t
 
 function buildThresholdPressureRows(
   currentTotalsByStudent: Map<string, number>,
-  crossingCountsByBand: Map<string, number>
+  crossingCountsByBand: Map<string, number>,
+  bands: DemeritEscalationBand[]
 ): AnalyticsSnapshot["thresholdPressure"] {
-  const liveBands = demeritEscalationBands.filter((band) => band.id !== "below_10");
+  const liveBands = bands.filter((band) => band.id !== "below_10");
   const rows = liveBands.map((band) => {
     const studentCount = [...currentTotalsByStudent.values()].filter(
-      (points) => getDemeritEscalationBand(points).id === band.id
+      (points) => getDemeritEscalationBand(points, bands).id === band.id
     ).length;
     return {
       bandId: band.id,
@@ -1163,7 +1165,8 @@ function buildStudentRows(
   currentTotalsByStudent: Map<string, number>,
   activeInterventionCountByStudent: Map<string, number>,
   queuedNotificationsByStudent: Map<string, number>,
-  failedNotificationsByStudent: Map<string, number>
+  failedNotificationsByStudent: Map<string, number>,
+  bands: DemeritEscalationBand[]
 ): AnalyticsStudentRow[] {
   const scopedStudents = new Map<string, StudentAggregate>();
   for (const event of filteredEvents) {
@@ -1193,7 +1196,7 @@ function buildStudentRows(
   return [...scopedStudents.values()]
     .map((student) => {
       const currentTotalPoints = currentTotalsByStudent.get(student.studentId) ?? student.totalPoints;
-      const currentBand = getDemeritEscalationBand(currentTotalPoints);
+      const currentBand = getDemeritEscalationBand(currentTotalPoints, bands);
       return {
         studentId: student.studentId,
         fullName: student.fullName,
@@ -1261,12 +1264,14 @@ export async function buildAnalyticsSnapshot(
   storage: StorageRepositories,
   filters: AnalyticsFilters
 ): Promise<AnalyticsSnapshot> {
-  const [students, interventions, notifications, disciplineEvents] = await Promise.all([
+  const [students, interventions, notifications, disciplineEvents, latestPolicy] = await Promise.all([
     storage.students.list(),
     storage.interventions.list(),
     storage.notifications.list(),
-    listDisciplineEvents(storage)
+    listDisciplineEvents(storage),
+    storage.policies.getLatest()
   ]);
+  const ladderBands = resolveDemeritEscalationBands(latestPolicy);
 
   const normalizedFilters = {
     grade: normalizeFilterValue(filters.grade),
@@ -1345,7 +1350,8 @@ export async function buildAnalyticsSnapshot(
     }
     if (
       normalizedFilters.thresholdBand &&
-      getDemeritEscalationBand(currentTotalsByStudent.get(event.studentId) ?? 0).id !== normalizedFilters.thresholdBand
+      getDemeritEscalationBand(currentTotalsByStudent.get(event.studentId) ?? 0, ladderBands).id !==
+        normalizedFilters.thresholdBand
     ) {
       return false;
     }
@@ -1379,8 +1385,8 @@ export async function buildAnalyticsSnapshot(
       }
       return sum + event.points;
     }, 0);
-    const beforeBand = getDemeritEscalationBand(beforeWindowPoints);
-    const throughBand = getDemeritEscalationBand(throughWindowPoints);
+    const beforeBand = getDemeritEscalationBand(beforeWindowPoints, ladderBands);
+    const throughBand = getDemeritEscalationBand(throughWindowPoints, ladderBands);
     if (throughBand.priority > beforeBand.priority) {
       crossingCountsByBand.set(throughBand.id, (crossingCountsByBand.get(throughBand.id) ?? 0) + 1);
     }
@@ -1441,7 +1447,7 @@ export async function buildAnalyticsSnapshot(
     }
   }
 
-  const thresholdPressure = buildThresholdPressureRows(currentTotalsByStudent, crossingCountsByBand);
+  const thresholdPressure = buildThresholdPressureRows(currentTotalsByStudent, crossingCountsByBand, ladderBands);
   const gradesInScope = normalizedFilters.grade
     ? [normalizedFilters.grade]
     : [
@@ -1486,7 +1492,8 @@ export async function buildAnalyticsSnapshot(
     currentTotalsByStudent,
     activeInterventionCountByStudent,
     queuedNotificationsByStudent,
-    failedNotificationsByStudent
+    failedNotificationsByStudent,
+    ladderBands
   );
   const trend = buildTrend(filteredEvents, {
     from: comparisonWindow.current.from,
@@ -1588,7 +1595,7 @@ export async function buildAnalyticsSnapshot(
       grades: availableGrades,
       violations: availableViolations,
       authors: availableAuthors,
-      thresholdBands: escalationBandOptions()
+      thresholdBands: escalationBandOptions(ladderBands)
     },
     summary,
     trend,

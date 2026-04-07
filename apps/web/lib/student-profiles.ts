@@ -111,7 +111,7 @@ export function normalizeStudentSourceType(value: string | undefined): StudentSo
 
 export function normalizeStudentBandFilter(value: string | undefined): StudentBandFilter {
   if (value === "points_20_29" || value === "points_35_39") {
-    return "points_20_39";
+    return "points_20_39" as DemeritEscalationBandId;
   }
 
   if (
@@ -121,7 +121,7 @@ export function normalizeStudentBandFilter(value: string | undefined): StudentBa
     value === "points_20_39" ||
     value === "points_40_plus"
   ) {
-    return value;
+    return value as DemeritEscalationBandId;
   }
 
   return DEFAULT_STUDENT_BAND_FILTER;

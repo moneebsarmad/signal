@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { editableCommunicationBandsFromPolicy } from "@/lib/demerit-escalation";
 import { createPolicyVersion, parseInterventionTemplates, policyInputSchema } from "@/lib/policies";
 import { getCurrentSession } from "@/lib/session";
 import { createStorageAdapter, prepareStorage } from "@/lib/storage";
@@ -19,7 +20,8 @@ export async function GET() {
     latest,
     policies: policies.map((policy) => ({
       ...policy,
-      parsedTemplates: parseInterventionTemplates(policy)
+      parsedTemplates: parseInterventionTemplates(policy),
+      parsedCommunicationBands: editableCommunicationBandsFromPolicy(policy)
     }))
   });
 }

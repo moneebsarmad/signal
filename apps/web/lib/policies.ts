@@ -4,7 +4,10 @@ import type { AuditEvent, Intervention, ParseRun, Policy, Student } from "@syc/d
 import type { StorageRepositories } from "@syc/storage";
 import { z } from "zod";
 
-import { demeritEscalationBands } from "@/lib/demerit-escalation";
+import {
+  normalizeEditableCommunicationBands,
+  type EditableCommunicationBand
+} from "@/lib/demerit-escalation";
 import { listDisciplineEvents } from "@/lib/discipline-events";
 
 export const policyInputSchema = z.object({
@@ -367,24 +370,7 @@ export function normalizePolicyInput(input: PolicyInput): PolicyInput {
     notesTemplate: template.notesTemplate.trim(),
     assignedTo: template.assignedTo?.trim() || null
   }));
-  const communicationBands =
-    input.communicationBands.length > 0
-      ? input.communicationBands
-      : demeritEscalationBands
-          .filter(
-            (band): band is typeof demeritEscalationBands[number] & {
-              id: "points_10_19" | "points_20_39" | "points_40_plus";
-            } => band.id !== "below_10"
-          )
-          .map((band) => ({
-            id: band.id,
-            label: band.label,
-            shortLabel: band.shortLabel,
-            parentCommunication: band.parentCommunication,
-            adminAction: band.adminAction,
-            adminMessage: band.adminMessage,
-            policyImpact: band.policyImpact
-          }));
+  const communicationBands: EditableCommunicationBand[] = normalizeEditableCommunicationBands(input.communicationBands);
 
   return {
     baseThreshold: input.baseThreshold,
