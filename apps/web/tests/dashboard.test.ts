@@ -201,16 +201,16 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   });
   assert.equal(Number.isNaN(Date.parse(marchSnapshot.generatedAt)), false);
   assert.equal(marchSnapshot.metrics.studentsTracked, 2);
-  assert.equal(marchSnapshot.metrics.studentsAt10Plus, 2);
+  assert.equal(marchSnapshot.metrics.studentsAt5Plus, 2);
   assert.equal(marchSnapshot.metrics.incidentsTracked, 3);
   assert.equal(marchSnapshot.metrics.totalPoints, 27);
   assert.equal(marchSnapshot.metrics.openInterventions, 1);
   assert.equal(marchSnapshot.metrics.queuedNotifications, 1);
-  assert.equal(marchSnapshot.metrics.studentsMissingParentEmailAt10To19, 2);
+  assert.equal(marchSnapshot.metrics.studentsMissingParentEmailAt5Plus, 2);
   assert.equal(marchSnapshot.warnings.guardianContactsUnavailable, false);
   assert.equal(marchSnapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(marchSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
-  assert.match(marchSnapshot.actionQueue[0]?.parentCommunication ?? "", /phone call and an email/i);
+  assert.match(marchSnapshot.actionQueue[0]?.parentCommunication ?? "", /administrator conference/i);
   assert.deepEqual(marchSnapshot.parseRunSourceCounts, { manual_pdf: 1, sycamore_api: 1 });
 
   const pdfExceptionSnapshot = await buildDashboardSnapshot(storage, {
@@ -220,7 +220,7 @@ test("buildDashboardSnapshot surfaces cumulative escalation posture for the live
   assert.equal(pdfExceptionSnapshot.metrics.studentsTracked, 1);
   assert.equal(pdfExceptionSnapshot.metrics.incidentsTracked, 2);
   assert.equal(pdfExceptionSnapshot.metrics.totalPoints, 16);
-  assert.equal(pdfExceptionSnapshot.metrics.studentsAt10Plus, 1);
+  assert.equal(pdfExceptionSnapshot.metrics.studentsAt5Plus, 1);
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(pdfExceptionSnapshot.actionQueue[0]?.currentBandId, "points_10_19");
   assert.deepEqual(pdfExceptionSnapshot.parseRunSourceCounts, { manual_pdf: 1 });
@@ -332,10 +332,10 @@ test("buildDashboardSnapshot merges split student identities before assigning la
   });
 
   assert.equal(snapshot.metrics.studentsTracked, 2);
-  assert.equal(snapshot.metrics.studentsAt10Plus, 2);
+  assert.equal(snapshot.metrics.studentsAt5Plus, 2);
   assert.equal(snapshot.metrics.studentsAt40Plus, 1);
   assert.equal(snapshot.bandCounts.find((band) => band.id === "points_10_19")?.count, 0);
-  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_20_39")?.count, 1);
+  assert.equal(snapshot.bandCounts.find((band) => band.id === "points_30_39")?.count, 1);
   assert.equal(snapshot.bandCounts.find((band) => band.id === "points_40_plus")?.count, 1);
   assert.equal(snapshot.actionQueue[0]?.studentId, "stu_1");
   assert.equal(snapshot.actionQueue[0]?.currentBandId, "points_40_plus");
@@ -365,7 +365,7 @@ test("buildDashboardSnapshot tolerates a missing guardian contacts table", async
   });
 
   assert.equal(snapshot.metrics.studentsTracked, 2);
-  assert.equal(snapshot.metrics.studentsMissingParentEmailAt10To19, null);
+  assert.equal(snapshot.metrics.studentsMissingParentEmailAt5Plus, null);
   assert.equal(snapshot.warnings.guardianContactsUnavailable, true);
   assert.equal(snapshot.actionQueue[0]?.studentId, "stu_1");
 });

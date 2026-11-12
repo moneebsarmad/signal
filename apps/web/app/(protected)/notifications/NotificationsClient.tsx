@@ -526,7 +526,7 @@ export function NotificationsClient({ canManageSycamore }: { canManageSycamore: 
           {parentOutreachRows.length === 0 ? (
             <EmptyState
               title="No parent outreach drafts"
-              description="Once policy evaluation creates 10-19 threshold interventions, parent drafts will appear here for approval."
+              description="Once policy evaluation creates 5-9 threshold interventions, parent drafts will appear here for approval."
             />
           ) : (
             <div className={tableShellClassName}>
@@ -634,7 +634,7 @@ export function NotificationsClient({ canManageSycamore }: { canManageSycamore: 
               <div className="space-y-1">
                 <h2 className="font-display text-2xl text-[var(--color-ink)]">Guardian contacts</h2>
                 <p className="text-sm leading-6 text-[var(--color-muted)]">
-                  Keep parent coverage healthy so 10-19 outreach can move without manual cleanup.
+                  Keep parent coverage healthy so 5-9 outreach can move without manual cleanup.
                 </p>
               </div>
             </div>

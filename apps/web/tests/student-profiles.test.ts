@@ -3,7 +3,11 @@ import test from "node:test";
 
 import type { ApprovedIncident, AuditEvent, Intervention, Notification, Student } from "@syc/domain";
 
-import { buildStudentDetailSnapshot, buildStudentDirectoryRows } from "../lib/student-profiles";
+import {
+  buildStudentDetailSnapshot,
+  buildStudentDirectoryRows,
+  normalizeStudentBandFilter
+} from "../lib/student-profiles";
 import { createInMemoryStorage } from "./review-actions.test";
 
 function seedStudents(): Student[] {
@@ -254,9 +258,15 @@ test("buildStudentDirectoryRows filters the communication ladder and exact handb
     assert.equal(tenToNineteenRows.length, 1);
     assert.equal(tenToNineteenRows[0]?.id, "stu_1");
 
-    const twentyToThirtyNineRows = await buildStudentDirectoryRows(storage, { bandId: "points_20_39" });
-    assert.equal(twentyToThirtyNineRows.length, 1);
-    assert.equal(twentyToThirtyNineRows[0]?.id, "stu_2");
+    const thirtyToThirtyNineRows = await buildStudentDirectoryRows(storage, { bandId: "points_30_39" });
+    assert.equal(thirtyToThirtyNineRows.length, 1);
+    assert.equal(thirtyToThirtyNineRows[0]?.id, "stu_2");
+
+    // Bookmarks written against the old 20-39 band still resolve to a current band.
+    const legacyRows = await buildStudentDirectoryRows(storage, {
+      bandId: normalizeStudentBandFilter("points_35_39")
+    });
+    assert.equal(legacyRows[0]?.id, "stu_2");
   });
 });
 

@@ -7,7 +7,7 @@ import type {
 } from "@syc/domain";
 import type { StorageRepositories } from "@syc/storage";
 
-import { getDemeritEscalationBand, type DemeritEscalationBandId } from "@/lib/demerit-escalation";
+import { BASE_BAND_ID, getDemeritEscalationBand, normalizeBandId, type DemeritEscalationBandId } from "@/lib/demerit-escalation";
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
 
 export interface StudentDirectoryFilters {
@@ -109,21 +109,11 @@ export function normalizeStudentSourceType(value: string | undefined): StudentSo
 }
 
 export function normalizeStudentBandFilter(value: string | undefined): StudentBandFilter {
-  if (value === "points_20_29" || value === "points_35_39") {
-    return "points_20_39" as DemeritEscalationBandId;
+  if (value === "communication_ladder") {
+    return value;
   }
 
-  if (
-    value === "communication_ladder" ||
-    value === "below_10" ||
-    value === "points_10_19" ||
-    value === "points_20_39" ||
-    value === "points_40_plus"
-  ) {
-    return value as DemeritEscalationBandId;
-  }
-
-  return DEFAULT_STUDENT_BAND_FILTER;
+  return normalizeBandId(value) ?? DEFAULT_STUDENT_BAND_FILTER;
 }
 
 function isMissingGuardianContactsTableError(error: unknown): boolean {
@@ -385,7 +375,7 @@ export async function buildStudentDirectoryRows(
       }
 
       if (normalizedFilters.bandId === "communication_ladder") {
-        return student.totalPoints >= 10;
+        return getDemeritEscalationBand(student.totalPoints).id !== BASE_BAND_ID;
       }
 
       return getDemeritEscalationBand(student.totalPoints).id === normalizedFilters.bandId;

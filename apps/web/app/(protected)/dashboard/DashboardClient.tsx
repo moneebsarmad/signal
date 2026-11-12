@@ -42,14 +42,14 @@ interface DashboardPayload {
     studentsTracked: number;
     incidentsTracked: number;
     totalPoints: number;
-    studentsAt10Plus: number;
+    studentsAt5Plus: number;
     studentsAt40Plus: number;
     openInterventions: number;
     queuedNotifications: number;
     failedNotifications: number;
     parentOutreachDraftsPending: number;
     approvedParentOutreach: number;
-    studentsMissingParentEmailAt10To19: number | null;
+    studentsMissingParentEmailAt5Plus: number | null;
   };
   warnings: {
     guardianContactsUnavailable: boolean;
@@ -557,8 +557,8 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                   icon={AlertTriangle}
                 />
                 <StatCard
-                  label="Students at 10+"
-                  value={data.metrics.studentsAt10Plus}
+                  label="Students at 5+"
+                  value={data.metrics.studentsAt5Plus}
                   icon={BellDot}
                 />
                 <StatCard
@@ -605,10 +605,10 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                 <InlineAlert tone="warning" title="Parent contact coverage is unavailable.">
                   The guardian contact mirror could not be read, so email coverage counts are temporarily hidden.
                 </InlineAlert>
-              ) : (data.metrics.studentsMissingParentEmailAt10To19 ?? 0) > 0 ? (
+              ) : (data.metrics.studentsMissingParentEmailAt5Plus ?? 0) > 0 ? (
                 <InlineAlert tone="warning" title="Parent contact coverage is incomplete.">
-                  {data.metrics.studentsMissingParentEmailAt10To19} student
-                  {data.metrics.studentsMissingParentEmailAt10To19 === 1 ? "" : "s"} in the 10-19 band do not
+                  {data.metrics.studentsMissingParentEmailAt5Plus} student
+                  {data.metrics.studentsMissingParentEmailAt5Plus === 1 ? "" : "s"} at 5+ points do not
                   currently have an email-enabled guardian contact on file.
                 </InlineAlert>
               ) : null}
@@ -626,7 +626,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       <Link href={buildStudentsHref("communication_ladder")} className={buttonStyles({ variant: "secondary" })}>
                         Open full ladder
                       </Link>
-                      <StatusBadge tone="warning">{data.metrics.studentsAt10Plus} at 10+</StatusBadge>
+                      <StatusBadge tone="warning">{data.metrics.studentsAt5Plus} at 5+</StatusBadge>
                       <StatusBadge tone="info">{activeEscalationBands} active bands</StatusBadge>
                       <StatusBadge tone="danger">{data.metrics.studentsAt40Plus} at 40+</StatusBadge>
                     </div>
@@ -813,7 +813,7 @@ export function DashboardClient({ canManageSycamore }: { canManageSycamore: bool
                       <>
                         <p className="font-display text-3xl text-[var(--color-ink)]">Grade {topPressureGrade.grade}</p>
                         <p className="text-sm text-[var(--color-muted)]">
-                          {topPressureGrade.escalatedCount} students at 10+ and {topPressureGrade.criticalCount} at 40+.
+                          {topPressureGrade.escalatedCount} students at 5+ and {topPressureGrade.criticalCount} at 40+.
                         </p>
                       </>
                     ) : (

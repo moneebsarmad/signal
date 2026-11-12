@@ -5,7 +5,7 @@ import type { StorageRepositories } from "@syc/storage";
 import { z } from "zod";
 
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
-import { getDemeritEscalationBand } from "@/lib/demerit-escalation";
+import { BASE_BAND_ID, PARENT_OUTREACH_BAND_ID, getDemeritEscalationBand } from "@/lib/demerit-escalation";
 
 const notificationConfigSchema = z.object({
   sendStaffEmails: z.boolean(),
@@ -78,8 +78,7 @@ interface NotificationMetadata {
 
 const CONFIG_ENTITY_TYPE = "notification_config";
 const CONFIG_ENTITY_ID = "active";
-const PARENT_OUTREACH_BAND_ID = "points_10_19";
-const PARENT_OUTREACH_TEMPLATE_KEY = "parent_outreach_10_19";
+const PARENT_OUTREACH_TEMPLATE_KEY = "parent_outreach_ladder";
 const DEFAULT_CONFIG: NotificationConfig = {
   sendStaffEmails: false,
   sendParentEmails: false,
@@ -448,7 +447,9 @@ export async function queueNotificationsForInterventions(input: {
       }
     }
 
-    if (!config.sendParentEmails || band.id !== PARENT_OUTREACH_BAND_ID) {
+    // The Code of Conduct has the school involve parents from the first threshold (5 points) upward, so a
+    // student who jumped past the 5-9 band (or whose policy has no 5-point milestone yet) still gets a draft.
+    if (!config.sendParentEmails || band.id === BASE_BAND_ID) {
       continue;
     }
 
@@ -507,7 +508,7 @@ export async function queueNotificationsForInterventions(input: {
         sentAt: null,
         error: "",
         kind: "parent_outreach",
-        bandId: PARENT_OUTREACH_BAND_ID,
+        bandId: band.id,
         templateKey: PARENT_OUTREACH_TEMPLATE_KEY,
         draftSubject: rendered.subject,
         draftBody: rendered.body,

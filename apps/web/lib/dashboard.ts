@@ -3,6 +3,7 @@ import type { StorageRepositories } from "@syc/storage";
 
 import { type DisciplineEventRecord, listDisciplineEvents } from "@/lib/discipline-events";
 import {
+  BASE_BAND_ID,
   demeritEscalationBands,
   getDemeritEscalationBand,
   resolveDemeritEscalationBands,
@@ -27,14 +28,14 @@ export interface DashboardSnapshot {
     studentsTracked: number;
     incidentsTracked: number;
     totalPoints: number;
-    studentsAt10Plus: number;
+    studentsAt5Plus: number;
     studentsAt40Plus: number;
     openInterventions: number;
     queuedNotifications: number;
     failedNotifications: number;
     parentOutreachDraftsPending: number;
     approvedParentOutreach: number;
-    studentsMissingParentEmailAt10To19: number | null;
+    studentsMissingParentEmailAt5Plus: number | null;
   };
   warnings: {
     guardianContactsUnavailable: boolean;
@@ -382,7 +383,7 @@ export async function buildDashboardSnapshot(
         localStudentId: student.localStudentId
       };
     })
-    .filter((student) => student.currentBandId !== "below_10")
+    .filter((student) => student.currentBandId !== BASE_BAND_ID)
     .sort((left, right) => {
       const leftBand = getDemeritEscalationBand(left.totalPoints, ladderBands);
       const rightBand = getDemeritEscalationBand(right.totalPoints, ladderBands);
@@ -471,7 +472,7 @@ export async function buildDashboardSnapshot(
       };
     row.studentCount += 1;
     const band = getDemeritEscalationBand(aggregate.totalPoints, ladderBands);
-    if (band.id !== "below_10") {
+    if (band.id !== BASE_BAND_ID) {
       row.escalatedCount += 1;
     }
     if (band.id === "points_40_plus") {
@@ -481,7 +482,7 @@ export async function buildDashboardSnapshot(
   }
 
   const bandCounts = ladderBands
-    .filter((band) => band.id !== "below_10")
+    .filter((band) => band.id !== BASE_BAND_ID)
     .map((band) => ({
       id: band.id,
       label: band.label,
@@ -528,8 +529,8 @@ export async function buildDashboardSnapshot(
       studentsTracked: studentAggregates.size,
       incidentsTracked: filteredEvents.length,
       totalPoints: filteredEvents.reduce((sum, event) => sum + event.points, 0),
-      studentsAt10Plus: [...studentAggregates.values()].filter(
-        (student) => getDemeritEscalationBand(student.totalPoints, ladderBands).id !== "below_10"
+      studentsAt5Plus: [...studentAggregates.values()].filter(
+        (student) => getDemeritEscalationBand(student.totalPoints, ladderBands).id !== BASE_BAND_ID
       ).length,
       studentsAt40Plus: [...studentAggregates.values()].filter(
         (student) => getDemeritEscalationBand(student.totalPoints, ladderBands).id === "points_40_plus"
@@ -541,11 +542,11 @@ export async function buildDashboardSnapshot(
       failedNotifications: notificationCounts.failed ?? 0,
       parentOutreachDraftsPending,
       approvedParentOutreach,
-      studentsMissingParentEmailAt10To19: guardianContactsUnavailable
+      studentsMissingParentEmailAt5Plus: guardianContactsUnavailable
         ? null
         : actionQueue.filter(
             (student) =>
-              student.currentBandId === "points_10_19" &&
+              student.currentBandId !== BASE_BAND_ID &&
               student.localStudentId &&
               !emailEnabledGuardianStudentIds.has(student.localStudentId)
           ).length

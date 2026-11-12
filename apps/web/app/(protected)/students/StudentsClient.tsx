@@ -32,7 +32,13 @@ import {
   tableShellClassName
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { escalationBandOptions, getDemeritEscalationBand } from "@/lib/demerit-escalation";
+import {
+  BASE_BAND_ID,
+  escalationBandOptions,
+  getDemeritEscalationBand,
+  normalizeBandId,
+  type DemeritEscalationBandId
+} from "@/lib/demerit-escalation";
 import { useLiveDataRefresh } from "../useLiveDataRefresh";
 
 interface StudentRow {
@@ -114,13 +120,7 @@ type PageMode = "risk" | "directory" | "interventions" | "case_file";
 type DetailTab = "overview" | "incidents" | "interventions" | "notifications" | "audit";
 type StatusTone = "neutral" | "info" | "success" | "warning" | "danger";
 type StudentSourceTypeFilter = "all" | "manual_pdf" | "sycamore_api";
-type StudentBandFilter =
-  | "all"
-  | "communication_ladder"
-  | "below_10"
-  | "points_10_19"
-  | "points_20_39"
-  | "points_40_plus";
+type StudentBandFilter = "all" | "communication_ladder" | DemeritEscalationBandId;
 type StudentFilterState = {
   search: string;
   grade: string;
@@ -422,13 +422,9 @@ export function StudentsClient({
         ? initialFilters.sourceType
         : DEFAULT_SOURCE_TYPE,
     bandId:
-      initialFilters?.bandId === "communication_ladder" ||
-      initialFilters?.bandId === "below_10" ||
-      initialFilters?.bandId === "points_10_19" ||
-      initialFilters?.bandId === "points_20_39" ||
-      initialFilters?.bandId === "points_40_plus"
+      initialFilters?.bandId === "communication_ladder"
         ? initialFilters.bandId
-        : DEFAULT_BAND_FILTER
+        : normalizeBandId(initialFilters?.bandId) ?? DEFAULT_BAND_FILTER
   };
   const resolvedInitialMode: PageMode =
     initialMode && PAGE_MODES.some((mode) => mode.key === initialMode) ? initialMode : "risk";
@@ -684,7 +680,7 @@ export function StudentsClient({
   const pageMetrics = useMemo(
     () => ({
       totalStudents: filteredStudents.length,
-      tenPlusStudents: filteredStudents.filter((student) => student.totalPoints >= 10).length,
+      escalatedStudents: filteredStudents.filter((student) => student.totalPoints >= 5).length,
       studentsWithInterventions: filteredStudents.filter((student) => student.interventionCount > 0).length,
       recentStudents: filteredStudents.filter((student) => isRecentStudent(student, referenceEpoch)).length
     }),
@@ -797,8 +793,8 @@ export function StudentsClient({
   const bandOptions = useMemo(
     () => [
       { id: DEFAULT_BAND_FILTER, label: "All students" },
-      { id: "communication_ladder" as const, label: "Communication ladder (10+)" },
-      ...escalationBandOptions().filter((band) => band.id !== "below_10")
+      { id: "communication_ladder" as const, label: "Communication ladder (5+)" },
+      ...escalationBandOptions().filter((band) => band.id !== BASE_BAND_ID)
     ],
     []
   );
@@ -857,7 +853,7 @@ export function StudentsClient({
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge tone="neutral">{pageMetrics.totalStudents} students</StatusBadge>
-            <StatusBadge tone="warning">{pageMetrics.tenPlusStudents} at 10+ points</StatusBadge>
+            <StatusBadge tone="warning">{pageMetrics.escalatedStudents} at 5+ points</StatusBadge>
             <StatusBadge tone="info">{pageMetrics.studentsWithInterventions} with interventions</StatusBadge>
             <StatusBadge tone="neutral">{pageMetrics.recentStudents} recent incidents</StatusBadge>
           </div>

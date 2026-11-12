@@ -4,7 +4,10 @@ import type { StorageRepositories } from "@syc/storage";
 import { listDisciplineEvents, type DisciplineEventRecord } from "@/lib/discipline-events";
 import {
   escalationBandOptions,
+  BASE_BAND_ID,
   getDemeritEscalationBand,
+  isLevelIvIncident,
+  normalizeBandId,
   resolveDemeritEscalationBands,
   type DemeritEscalationBand,
   type DemeritEscalationBandId
@@ -257,15 +260,7 @@ function normalizeThresholdBandFilter(value: string | undefined): DemeritEscalat
     return undefined;
   }
 
-  if (value === "points_20_29" || value === "points_35_39") {
-    return "points_20_39" as DemeritEscalationBandId;
-  }
-
-  if (value === "below_10" || value === "points_10_19" || value === "points_20_39" || value === "points_40_plus") {
-    return value as DemeritEscalationBandId;
-  }
-
-  return undefined;
+  return normalizeBandId(value) ?? undefined;
 }
 
 function isSecondaryAnalyticsGrade(value: string | null | undefined): value is string {
@@ -664,11 +659,22 @@ function narrativeThemeForEvent(event: DisciplineEventRecord): string {
 function severityKeyForEvent(
   event: DisciplineEventRecord
 ): Pick<AnalyticsSeverityMixRow, "key" | "label" | "tone"> {
+  // Code of Conduct levels: I = guidance, II = character, III = major, IV = zero tolerance.
+  // Point values vary by grade band (e.g. a Level II is 2/3/5), so severity follows the
+  // infraction level when Sycamore provides one and only falls back to points otherwise.
   const level = event.level ?? null;
-  if ((level !== null && level >= 3) || event.points >= 5) {
+  if (isLevelIvIncident(event) || (level !== null && level >= 3)) {
     return { key: "high", label: "High severity", tone: "danger" };
   }
-  if ((level !== null && level >= 2) || event.points >= 3) {
+  if (level !== null) {
+    return level >= 2
+      ? { key: "medium", label: "Moderate severity", tone: "warning" }
+      : { key: "low", label: "Lower severity", tone: "info" };
+  }
+  if (event.points >= 10) {
+    return { key: "high", label: "High severity", tone: "danger" };
+  }
+  if (event.points >= 5) {
     return { key: "medium", label: "Moderate severity", tone: "warning" };
   }
   return { key: "low", label: "Lower severity", tone: "info" };
@@ -713,7 +719,7 @@ function buildThresholdPressureRows(
   crossingCountsByBand: Map<string, number>,
   bands: DemeritEscalationBand[]
 ): AnalyticsSnapshot["thresholdPressure"] {
-  const liveBands = bands.filter((band) => band.id !== "below_10");
+  const liveBands = bands.filter((band) => band.id !== BASE_BAND_ID);
   const rows = liveBands.map((band) => {
     const studentCount = [...currentTotalsByStudent.values()].filter(
       (points) => getDemeritEscalationBand(points, bands).id === band.id
@@ -1532,7 +1538,7 @@ export async function buildAnalyticsSnapshot(
       description: "Total points accumulated in the active decision window."
     },
     {
-      label: "Live 10+ students",
+      label: "Live 5+ students",
       value: thresholdPressure.escalatedStudents,
       description: "Students currently at or above the first handbook escalation band."
     },
