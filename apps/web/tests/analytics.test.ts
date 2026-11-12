@@ -389,9 +389,9 @@ test("buildAnalyticsSnapshot keeps live escalation bands even when the analytics
   assert.equal(snapshot.thresholdPressure.escalatedStudents, 1);
   assert.deepEqual(
     snapshot.thresholdPressure.rows.map((row) => row.bandId),
-    ["points_10_19", "points_20_39", "points_40_plus"]
+    ["points_5_9", "points_10_19", "points_20_29", "points_30_39", "points_40_plus"]
   );
-  assert.equal(snapshot.thresholdPressure.rows[0]?.share, 100);
+  assert.equal(snapshot.thresholdPressure.rows.find((row) => row.bandId === "points_10_19")?.share, 100);
   assert.equal(snapshot.studentRows[0]?.studentId, "stu_1");
   assert.equal(snapshot.studentRows[0]?.totalPoints, 4);
   assert.equal(snapshot.studentRows[0]?.currentTotalPoints, 16);
@@ -421,9 +421,11 @@ test("buildAnalyticsSnapshot computes pressure, recurrence, workflow, and narrat
   assert.equal(snapshot.summary[0]?.value, 4);
   assert.equal(snapshot.summary[1]?.value, 6);
   assert.equal(snapshot.summary[2]?.value, 22);
-  assert.equal(snapshot.summary[3]?.value, 1);
-  assert.equal(snapshot.thresholdPressure.crossedIntoHigherBand, 1);
-  assert.equal(snapshot.thresholdPressure.rows.length, 3);
+  // Live 5+ students: stu_1 (12), stu_3 (6) and stu_4 (6); stu_2 sits at 4.
+  assert.equal(snapshot.summary[3]?.value, 3);
+  // stu_1 (3 -> 12), stu_3 (3 -> 6) and stu_4 (0 -> 6) each moved into a higher band; stu_3/stu_4 enter the new 5-9 band.
+  assert.equal(snapshot.thresholdPressure.crossedIntoHigherBand, 3);
+  assert.equal(snapshot.thresholdPressure.rows.length, 5);
   assert.equal(
     snapshot.thresholdPressure.rows.reduce((sum, row) => sum + row.share, 0),
     100

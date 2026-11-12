@@ -94,9 +94,9 @@ function communicationBandsFromPolicy(policy: PolicyRow | null): EditableCommuni
 export function PoliciesClient() {
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
   const [latest, setLatest] = useState<PolicyRow | null>(null);
-  const [baseThreshold, setBaseThreshold] = useState("");
+  const [baseThreshold, setBaseThreshold] = useState("5");
   const [warningOffsets, setWarningOffsets] = useState<string[]>(["3", "1"]);
-  const [milestones, setMilestones] = useState<string[]>(["0", "10", "20", "30"]);
+  const [milestones, setMilestones] = useState<string[]>(["0", "5", "15", "25", "35"]);
   const [templates, setTemplates] = useState<PolicyTemplate[]>([emptyTemplate()]);
   const [communicationBands, setCommunicationBands] = useState<EditableCommunicationBand[]>(
     communicationBandsFromPolicy(null)
@@ -364,6 +364,10 @@ export function PoliciesClient() {
             <Field label="Base threshold X">
               <Input value={baseThreshold} onChange={(event) => setBaseThreshold(event.currentTarget.value)} />
             </Field>
+            <p className="text-sm leading-7 text-[var(--color-muted)]">
+              Code of Conduct thresholds are 5, 10, 20, 30 and 40 points. With X = 5, milestones 0, 5, 15, 25 and 35
+              land exactly on those thresholds.
+            </p>
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3">

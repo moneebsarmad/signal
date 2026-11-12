@@ -500,7 +500,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                   <h2 className="mt-2 font-display text-2xl text-[var(--color-ink)]">Live band distribution</h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <StatusBadge tone="warning">{data.thresholdPressure.escalatedStudents} live 10+</StatusBadge>
+                  <StatusBadge tone="warning">{data.thresholdPressure.escalatedStudents} live 5+</StatusBadge>
                   <StatusBadge tone="danger">{data.thresholdPressure.criticalStudents} live 40+</StatusBadge>
                   <StatusBadge tone="info">{data.thresholdPressure.crossedIntoHigherBand} entered higher band</StatusBadge>
                 </div>
@@ -558,7 +558,7 @@ export function DeepAnalytics({ embedded = false }: { embedded?: boolean }) {
                           <th className={tableHeadCellClassName}>Students</th>
                           <th className={tableHeadCellClassName}>Incidents /100</th>
                           <th className={tableHeadCellClassName}>Points /100</th>
-                          <th className={tableHeadCellClassName}>Live 10+</th>
+                          <th className={tableHeadCellClassName}>Live 5+</th>
                           <th className={tableHeadCellClassName}>Live 40+</th>
                         </tr>
                       </thead>

@@ -5,6 +5,7 @@ import type { StorageRepositories } from "@syc/storage";
 import { z } from "zod";
 
 import {
+  EDITABLE_BAND_IDS,
   normalizeEditableCommunicationBands,
   type EditableCommunicationBand
 } from "@/lib/demerit-escalation";
@@ -27,7 +28,7 @@ export const policyInputSchema = z.object({
   communicationBands: z
     .array(
       z.object({
-        id: z.enum(["points_10_19", "points_20_39", "points_40_plus"]),
+        id: z.enum(EDITABLE_BAND_IDS),
         label: z.string().min(1),
         shortLabel: z.string().min(1),
         parentCommunication: z.string().min(1),
